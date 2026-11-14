@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "goDomainRoots": [
+    "internal/access",
+    "internal/recordings",
+    "internal/library",
+    "internal/runtime",
+    "internal/delivery"
+  ],
+  "forbiddenImportFragments": [
+    "/internal/adapters",
+    "/internal/platform"
+  ],
+  "privateDirectoryName": "private",
+  "rule": "Domain modules cannot import adapters, platform implementations, or another module's private package."
+}

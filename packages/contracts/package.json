@@ -1,0 +1,13 @@
+{
+  "name": "@tacit/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/verify-placeholder.mjs",
+    "generate": "node scripts/verify-placeholder.mjs",
+    "lint": "node scripts/verify-placeholder.mjs",
+    "test": "node --test",
+    "typecheck": "node scripts/verify-placeholder.mjs"
+  }
+}

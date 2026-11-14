@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+.next
+node_modules
+coverage
+dist
+*.log
+.env
+.env.*
+docs/tickets

@@ -1,0 +1,9 @@
+[project]
+name = "tacit-speech"
+version = "0.0.0"
+description = "Tacit speech inference service boundary"
+requires-python = "==3.13.*"
+dependencies = []
+
+[tool.uv]
+package = false

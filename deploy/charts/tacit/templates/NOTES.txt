@@ -1,0 +1,1 @@
+Tacit workload templates are introduced by TAC-011 after identity, resource and network boundaries are specified.
