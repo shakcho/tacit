@@ -15,11 +15,11 @@ fi
 
 go vet ./...
 go test ./...
+./scripts/check-generated.sh
 pnpm --recursive lint
 pnpm --recursive typecheck
 pnpm --recursive test
 PYTHONPATH="services/speech/src${PYTHONPATH:+:$PYTHONPATH}" \
   uv run --locked --all-packages python -m unittest discover -s services/speech/tests
-./scripts/check-generated.sh
 
 echo "Tacit verification passed."

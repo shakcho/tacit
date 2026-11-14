@@ -1,6 +1,9 @@
 packages:
   - apps/*
   - packages/*
+catalog:
+  '@tanstack/react-query': 5.107.1
+  orval: 8.48.0
 
 catalogMode: strict
 

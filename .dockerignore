@@ -3,6 +3,7 @@
 .venv
 .next
 node_modules
+apps/web/src/api/generated
 coverage
 dist
 *.log

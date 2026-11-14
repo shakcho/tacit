@@ -2,15 +2,5 @@
   "name": "@tacit/contracts",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "exports": {
-    "./operations": "./src/generated/operations.ts"
-  },
-  "scripts": {
-    "build": "node scripts/generate-documents.mjs --check",
-    "generate": "node scripts/generate-documents.mjs",
-    "lint": "node scripts/generate-documents.mjs --check",
-    "test": "node --test",
-    "typecheck": "node scripts/generate-documents.mjs --check"
-  }
+  "type": "module"
 }

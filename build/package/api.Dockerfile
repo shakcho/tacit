@@ -3,6 +3,7 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY cmd ./cmd
+COPY internal ./internal
 ARG SOURCE_REVISION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${SOURCE_REVISION}" -o /out/tacit-api ./cmd/api
 

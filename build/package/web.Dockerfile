@@ -10,7 +10,8 @@ FROM dependencies AS builder
 ARG SOURCE_REVISION=dev
 COPY apps/web apps/web
 COPY packages/contracts packages/contracts
-RUN pnpm --filter @tacit/contracts generate \
+COPY internal/adapters/httpapi/openapi.yaml internal/adapters/httpapi/openapi.yaml
+RUN pnpm --filter @tacit/web generate \
     && pnpm --filter @tacit/web build
 
 FROM node:26.13.1-alpine AS runtime
