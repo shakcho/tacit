@@ -1,65 +1,73 @@
-# Control-plane shell design
+# OpenAPI control-plane shell
 
-## Problem
+## Decision
 
-TAC-004 adds a typed GraphQL path to the existing Go HTTP shell. The change must preserve the current CLI, probe, and local development contracts. It must also prove the boundary between GraphQL, domain code, and an in-memory adapter without adding authentication, persistence, product aggregates, or job execution.
+TAC-004 exposes the product control plane as versioned HTTP operations described by OpenAPI 3.1. The OpenAPI document is the caller-visible source of truth. Go owns authorization and product behavior; transport structs are parsed into domain values at the adapter boundary.
 
-The process runtime has one more constraint. `http.Server.Shutdown` does not close hijacked WebSocket connections. The shell therefore needs one owner for HTTP admission, WebSocket admission, readiness, telemetry, and the drain deadline.
+The Next.js application uses an Orval-generated Fetch/TanStack Query client. Realtime product updates will use a separate server-sent event stream containing small invalidations and replay cursors. Provider media, raw audio/video, and speech-executor streams remain outside the product HTTP API.
+
+See [ADR 0001](decisions/0001-openapi-control-plane.md) for the transport decision.
 
 ## Usage
 
-The public API keeps these commands and routes:
+Start the API and inspect the contract:
 
 ```text
 go run ./cmd/api --listen 127.0.0.1:8080
 go run ./cmd/api --version
-GET /healthz
-GET /readyz
-POST /graphql
+GET  /healthz
+GET  /readyz
+GET  /openapi.yaml
+POST /v1/shell-samples
+GET  /v1/shell-samples/{sampleId}
 ```
 
-The worker roles run as separate processes:
+The web application calls the root-relative `/api` base path. Next.js proxies it to the server-only `TACIT_API_ORIGIN`, so browser code never needs a private service hostname and local development avoids a separate CORS policy.
 
 ```text
-go run ./cmd/worker-ingress
-go run ./cmd/dispatch
+Browser /api/v1/shell-samples -> Next.js proxy -> Go /v1/shell-samples
 ```
 
-The worker processes expose probes and bounded shutdown. They do not accept worker results or dispatch jobs until later tickets define those protocols.
+`NEXT_PUBLIC_API_BASE_PATH` can change the browser-visible prefix. It must remain root-relative. `TACIT_API_ORIGIN` is server-only.
 
-The sample GraphQL mutation accepts `Idempotency-Key` and an optional `X-Request-ID` header. The query reads the sample from the same process. Sample state does not survive a restart and is not shared across replicas.
+## Contract ownership
 
-```graphql
-mutation CreateShellSample($input: CreateShellSampleInput!) {
-  createShellSample(input: $input) {
-    __typename
-    ... on ShellSampleCreated {
-      sample { id offset }
-      replayed
-    }
-    ... on ShellSampleConflict { code }
-  }
+`internal/adapters/httpapi/openapi.yaml` owns paths, operation IDs, parameters, response statuses, and JSON shapes. It uses OpenAPI 3.1 rather than the newest specification version until the selected Go and TypeScript generators prove the same 3.2 feature set.
+
+The contract follows these rules:
+
+- Paths are resource- and workflow-oriented, not table-shaped CRUD.
+- Commands use normal HTTP semantics, including `Idempotency-Key`, `Location`, and specific success statuses.
+- Errors use `application/problem+json` with a stable machine `code` in addition to RFC 9457 fields.
+- Request IDs are accepted or generated once and returned as `X-Request-ID`.
+- Media time is a canonical decimal string containing nonnegative recording-relative microseconds.
+- IDs use documented canonical wire formats and are parsed once at the boundary.
+- Async work will return `202 Accepted` with a job resource rather than holding a request open.
+
+The shell sample proves the boundary without defining a product aggregate. The create operation accepts this body:
+
+```json
+{
+  "id": "smp_0123456789abcdef0123456789abcdef",
+  "offsetMicroseconds": "1234567"
 }
-
-query FindShellSample($id: ShellSampleID!) {
-  shellSample(id: $id) { id offset }
-}
 ```
 
-The API root creates the GraphQL handler through the process runtime. The callback receives the WebSocket tracker before it builds the handler.
+It requires one `Idempotency-Key` header. A new command returns `201 Created`; an exact retry returns the original result with `200 OK` and `replayed: true`. Reusing a key for another command or reusing an ID for another sample returns `409 Conflict` with a distinct problem code.
 
-```go
-samples := memory.NewShellSamples(memory.Limits{
-	Samples:            256,
-	IdempotencyEntries: 512,
-})
+## Boundary behavior
 
-return process.Run(ctx, cfg, func(sockets process.SocketTracker) http.Handler {
-	return graph.NewHandler(samples, sockets)
-})
-```
+`internal/adapters/httpapi` owns HTTP decoding, OpenAPI wire structs, problem responses, and translation into domain values. Transport types never enter a domain package.
 
-The resolver sees only the domain interface:
+The adapter enforces these contracts before calling a domain interface:
+
+- JSON command bodies are limited to one MiB, including streamed bodies.
+- `Content-Type` must be `application/json`.
+- Unknown JSON fields, malformed bodies, and trailing JSON values are rejected.
+- IDs, media times, and idempotency keys are converted to validated domain types exactly once.
+- Stable problem codes are allowlisted and details contain no internal error or secret content.
+
+The domain-facing interface remains independent of HTTP:
 
 ```go
 type Samples interface {
@@ -68,125 +76,78 @@ type Samples interface {
 }
 ```
 
-## Shape
+The in-memory adapter owns sample and idempotency indexes under one mutex. Its state is deliberately process-local and bounded; it proves typed outcomes and retry behavior, not durable multi-replica idempotency.
 
-### Domain values and outcomes
+## Frontend generation
 
-`internal/runtime/shellsample` owns the sample interface and these validated values:
+`apps/web/orval.config.ts` reads the canonical OpenAPI document and writes committed code under `apps/web/src/api/generated`. The generated surface includes:
 
-- `ID` stores 16 bytes. Its wire form is `smp_` followed by 32 lowercase hexadecimal characters.
-- `MediaTime` stores nonnegative recording-relative microseconds in an `int64`. Its GraphQL form is a canonical decimal string.
-- `IdempotencyKey` contains 1 to 128 characters from the documented ASCII allowlist.
-- `CreateCommand` contains an ID, a media time, and an idempotency key.
-- `CreateResult` has private fields and constructors for created, replayed, idempotency conflict, sample conflict, and unavailable outcomes.
+- Fetch request functions;
+- TanStack Query hooks and query keys;
+- request, response, and problem models; and
+- typed mutation error unions.
 
-Private fields prevent callers from constructing an invalid result. GraphQL scalar codecs parse wire values into domain values once. Domain code does not parse them again.
+`apps/web/src/api/client.ts` is the small hand-authored transport policy. It applies same-origin credentials, parses response bodies, and throws `APIError` for non-success HTTP responses so TanStack Query never caches a problem response as successful data.
 
-The in-memory adapter owns two indexes under one mutex. The first maps an ID to a sample. The second maps an idempotency key to the validated command and its original result. One lock makes command comparison, sample creation, and result recording one transition.
+The application owns one `QueryClient` through `QueryProvider`. Product features consume generated hooks; they do not hand-build URLs or duplicate response types.
 
-The sample uses these fixed rules:
+`pnpm generate` is deterministic. `scripts/check-generated.sh` regenerates the client and fails on modified or untracked generated files.
 
-- The same key and the same command return the original result as a replay.
-- The same key and a different command return `IDEMPOTENCY_CONFLICT`.
-- The same ID and the same media time under a new key return the existing sample and bind the key.
-- The same ID and a different media time return `SAMPLE_CONFLICT`.
-- A full adapter returns `UNAVAILABLE`. It does not evict an idempotency record.
+## Process lifecycle
 
-These rules prove typed outcomes and atomic retries in one process. They do not promise durable or cross-replica idempotency.
+`internal/platform/process` owns the listener, probes, admission state, request correlation, safe structured logging, and the drain deadline.
 
-### GraphQL boundary
+Shutdown follows one sequence:
 
-`internal/adapters/graphql` owns the schema, generated gqlgen code, scalar codecs, resolvers, and the error presenter. Generated or transport types do not enter a domain package.
+1. mark readiness unavailable and reject new application work;
+2. let active HTTP requests finish within the configured drain bound;
+3. cancel request contexts and close the server at the deadline; and
+4. report whether the process drained cleanly.
 
-The boundary enforces these contracts:
+There is no WebSocket lifecycle in TAC-004. TAC-010 will add an SSE stream manager that closes long-lived event responses during drain and reconstructs state through a durable cursor. Raw media does not use that stream.
 
-- An HTTP body can contain at most 1 MiB. The limit also applies to streamed bodies.
-- A WebSocket message can contain at most 1 MiB.
-- Invalid IDs, media times, cursors, idempotency keys, and request bodies return stable codes.
-- Mutations require one `Idempotency-Key` header.
-- The shell rejects mutations over WebSocket. This keeps one idempotency convention.
-- The error presenter returns only allowlisted codes and fixed messages.
+Logs use an allowlist: role, safe HTTP method, route template, status class, and request ID. Headers, bodies, raw URLs, transcript text, tokens, credentials, and arbitrary error strings are excluded.
 
-`Cursor` remains a boundary codec because it describes navigation, not sample state. Its wire form is unpadded base64url containing `v1:<sample-id>`. The parser validates the version and the ID, then rejects noncanonical encodings.
-
-### Process lifecycle and telemetry
-
-`internal/platform/process` owns the listener, probe state, admission state, request metadata, telemetry providers, WebSocket registry, and drain deadline.
-
-```go
-type HandlerFactory func(SocketTracker) http.Handler
-
-type Config struct {
-	Role         string
-	Listen       string
-	DrainTimeout time.Duration
-}
-
-func Run(context.Context, Config, HandlerFactory) error
-```
-
-`Run` creates the socket registry before it calls the handler factory. The GraphQL adapter registers every accepted socket with that registry. Shutdown marks the process unready, rejects new application work, cancels active socket operations, drains HTTP and WebSocket work against one deadline, force-closes remaining work, and flushes telemetry with the time that remains.
-
-Liveness remains healthy while the process drains. Readiness changes to unavailable before the listener closes. Tests observe the state transition inside the process and do not assume that probes stay reachable after listener shutdown starts.
-
-Request middleware accepts one valid `X-Request-ID` value or creates a random value. It echoes the value and adds it to the request context, logs, and spans. Metrics never use request IDs as labels.
-
-The telemetry allowlist contains the role, HTTP method, route template, status class, bounded GraphQL operation name, and request ID for logs and spans. Logs, spans, and metrics exclude request bodies, GraphQL variables, headers, raw URLs, transcript text, tokens, credentials, and arbitrary error strings.
-
-### Modules
+## Modules
 
 ```text
 cmd/api                         public API composition
 cmd/worker-ingress              inert worker-result ingress composition
 cmd/dispatch                    inert background dispatch composition
 internal/runtime/shellsample    domain values, outcomes, and Samples interface
-internal/adapters/graphql       schema, gqlgen output, scalars, and resolvers
+internal/adapters/httpapi       OpenAPI document, HTTP decoding, and response mapping
 internal/platform/memory        bounded process-local Samples implementation
-internal/platform/process       probes, admission, telemetry, and drain
+internal/platform/process       probes, admission, correlation, logging, and drain
+apps/web/src/api/generated      committed Orval/TanStack Query client
 ```
 
-The composition roots stay small. They parse flags, provide role configuration, construct role dependencies, and call `process.Run`.
+Domain packages cannot import HTTP, adapters, platform implementations, SQL, or vendor SDKs. The repository boundary check enforces adapter and platform exclusions for every domain root.
 
-### Generated files and import rules
+## Generator decision
 
-The repository pins gqlgen as a Go tool. `go generate` writes committed Go files under the GraphQL adapter. The generated-file check compares the complete expected file set and file contents, including new untracked output.
+Orval is selected for the TypeScript client because the frontend directly consumes TanStack Query hooks. The Go shell currently keeps a small handwritten HTTP adapter while the repository evaluates `ogen` against strict `oapi-codegen` using this contract.
 
-The boundary checker parses Go imports for every production file under a domain root. Domain packages cannot import GraphQL, SQL, HTTP, adapters, platform packages, or vendor SDKs. Positive and negative fixtures prove that the checker accepts a domain import and rejects each forbidden class.
+The Go generator spike must compare:
 
-The API container copies `go.mod`, `go.sum`, `cmd`, and `internal` before it compiles the executable.
+- OpenAPI 3.1 coverage and validation behavior;
+- strict server interfaces and compile-time response variants;
+- `application/problem+json`, headers, and SSE support;
+- generated diff stability and maintenance activity; and
+- OpenTelemetry integration without transport types leaking into domain packages.
 
-## Synthesis decision
+Exactly one Go generator will be selected before the first product aggregate is ported. Tacit will not maintain parallel generated and handwritten product endpoints.
 
-Candidate 2 is the base because its two-method domain interface hides the in-memory adapter's atomic behavior without adding a service and repository relay. It also defines one owner for readiness, socket admission, telemetry, and shutdown.
+## Tradeoffs
 
-The design uses Candidate 1's plain `memory.Limits` value instead of a single-purpose functional option. The cross-judge found three required corrections. Media time remains in microseconds, the sample has one fixed conflict policy, and `process.Run` creates the socket tracker before GraphQL construction.
+- Purpose-built read models replace arbitrary client-selected field graphs. This keeps authorization, performance, and caching visible in the contract at the cost of adding an endpoint when a genuinely new view is required.
+- SSE is one-way by design. It matches invalidation plus canonical refetch and avoids a bidirectional socket protocol that the product does not currently require.
+- Orval output is committed. Diffs are larger, but frontend and API contract changes remain reviewable and CI can detect drift.
+- The temporary shell sample is not a product model and will be removed after real aggregates prove the same boundary.
 
-The design rejects Candidate 1's role-host packages. Those packages would forward handlers without hiding current policy.
+## Verification
 
-## Tradeoffs accepted
-
-- The sample API is temporary. It proves the dependency direction without claiming a product aggregate.
-- The memory adapter uses one mutex. The lock keeps the sample transition atomic and easy to review.
-- The worker roles are inert. Their roots prove deployment and lifecycle boundaries without inventing protocols.
-- WebSocket mutations are unavailable. HTTP remains the only command path until a later ticket defines socket idempotency.
-
-## Alternatives considered
-
-A generic command bus would expose registration, routing, and transaction order to the GraphQL caller. The two-method interface hides more behavior with fewer concepts.
-
-Separate service and repository interfaces would repeat the same methods and arguments. One domain interface keeps the resolver-to-adapter path at two calls.
-
-A global GraphQL idempotency cache would compare wire variables and operation text. The chosen design compares validated domain commands inside the adapter.
-
-## Implementation reconciliation
-
-No implementation deviation is accepted yet. Update this section if implementation changes a caller contract, a type, or an ownership rule.
-
-## Open questions and risks
-
-- A real socket test must prove that the selected gqlgen transport exposes every accepted connection to `SocketTracker`.
-- The managed development environment cannot download new Go modules. Generation and tests need a machine with Go module network access before the PR can claim completion.
-
-## Next implementation step
-
-Add the schema, domain values, in-memory adapter, and one GraphQL integration test. Then add the shared process runtime and its drain tests.
+- Generate the Orval client and verify a clean working tree for generated paths.
+- Exercise create, replay, lookup, conflicts, invalid inputs, unknown JSON fields, unsupported content types, and oversized bodies.
+- Confirm every problem response has `application/problem+json` and a stable code.
+- Run boundary, Go, TypeScript, lint, and component tests.
+- Terminate the process during an active request and verify completion or forced cancellation at the configured bound.

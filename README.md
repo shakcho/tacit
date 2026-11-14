@@ -41,7 +41,7 @@ Start the current application processes together from the repository root:
 pnpm dev
 ```
 
-This starts the Next.js workspace at `http://127.0.0.1:3000/meetings` and the Go API shell at `http://127.0.0.1:8080`. The API currently exposes `GET /healthz`, `GET /readyz`, and an explicit `501 Not Implemented` GraphQL boundary until TAC-004 completes the control plane. Press `Ctrl+C` once to stop both processes.
+This starts the Next.js workspace at `http://127.0.0.1:3000/meetings` and the Go API shell at `http://127.0.0.1:8080`. The API exposes health/readiness probes, its canonical contract at `GET /openapi.yaml`, and the typed `/v1/shell-samples` exercise endpoints. The browser uses the generated Orval client through the Next.js `/api` proxy. Press `Ctrl+C` once to stop both processes.
 
 Override the default listeners when needed:
 
