@@ -23,6 +23,9 @@ for (const domainRoot of manifest.goDomainRoots) {
     for (const fragment of manifest.forbiddenImportFragments) {
       if (source.includes(fragment)) errors.push(`${relative(root, file)} imports forbidden ${fragment}`);
     }
+    for (const module of manifest.forbiddenExternalImports ?? []) {
+      if (source.includes(`"${module}`)) errors.push(`${relative(root, file)} imports forbidden ${module}`);
+    }
     const ownDomain = domainRoot.split("/").at(-1);
     const privateImport = /"github\.com\/shakcho\/tacit\/internal\/([^/]+)\/private(?:\/[^\"]*)?"/g;
     let match;

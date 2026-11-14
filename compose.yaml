@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: tacit_dev
+      POSTGRES_PASSWORD: tacit_dev
+      POSTGRES_USER: tacit_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tacit_dev -d tacit_dev"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - tacit-postgres:/var/lib/postgresql/data
+
+volumes:
+  tacit-postgres:

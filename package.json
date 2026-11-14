@@ -9,12 +9,15 @@
   },
   "scripts": {
     "build": "pnpm generate && pnpm --recursive build",
+    "db:migrate": "go run ./cmd/tacit-db migrate",
+    "db:up": "docker compose up -d --wait postgres",
     "dev": "node scripts/dev.mjs",
     "dev:api": "go run ./cmd/api",
     "dev:web": "pnpm --filter @tacit/web dev",
     "generate": "pnpm --recursive generate",
     "lint": "pnpm --recursive lint",
     "test": "pnpm --recursive test",
+    "test:postgres": "./scripts/test-postgres.sh",
     "typecheck": "pnpm --recursive typecheck"
   }
 }

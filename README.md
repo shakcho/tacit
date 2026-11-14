@@ -33,6 +33,26 @@ Run the local CI equivalent at any time:
 ./scripts/verify.sh
 ```
 
+## Local PostgreSQL
+
+Start the development database and apply the embedded forward migrations:
+
+```bash
+pnpm db:up
+export TACIT_DATABASE_DIRECT_URL='postgres://tacit_dev:tacit_dev@127.0.0.1:54329/tacit_dev?sslmode=disable'
+pnpm db:migrate
+```
+
+Create a separate database whose name starts with `tacit_test_`, then run the PostgreSQL integration suite:
+
+```bash
+PGPASSWORD=tacit_dev createdb --host 127.0.0.1 --port 54329 --username tacit_dev tacit_test_source
+export TACIT_TEST_DATABASE_URL='postgres://tacit_dev:tacit_dev@127.0.0.1:54329/tacit_test_source?sslmode=disable'
+pnpm test:postgres
+```
+
+The API shell remains memory-backed until managed authentication can supply an actor and an active organization. TAC-005 tests the PostgreSQL foundation without exposing an unauthenticated tenant selector.
+
 ## Local development
 
 Start the current application processes together from the repository root:

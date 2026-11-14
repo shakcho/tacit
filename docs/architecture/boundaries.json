@@ -11,6 +11,10 @@
     "/internal/adapters",
     "/internal/platform"
   ],
+  "forbiddenExternalImports": [
+    "database/sql",
+    "github.com/jackc/pgx"
+  ],
   "privateDirectoryName": "private",
   "rule": "Domain modules cannot import adapters, platform implementations, or another module's private package."
 }

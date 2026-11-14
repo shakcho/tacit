@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 node scripts/check-boundaries.mjs
+node scripts/check-database-budget.mjs
+node --test scripts/database-budget.test.mjs
 
 unformatted="$(gofmt -l cmd internal)"
 if [[ -n "$unformatted" ]]; then

@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: 26.13.1
       - run: node scripts/check-boundaries.mjs
+      - run: node scripts/check-database-budget.mjs
+      - run: node --test scripts/database-budget.test.mjs
 
   go:
     runs-on: ubuntu-latest
@@ -30,6 +32,39 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race -cover ./...
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_DB: tacit_test_source
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tacit_test_source"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+    env:
+      PGPASSWORD: postgres
+      TACIT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/tacit_test_source?sslmode=disable
+      TACIT_RESTORE_SOURCE_URL: postgres://postgres:postgres@127.0.0.1:5432/tacit_test_source?sslmode=disable
+      TACIT_RESTORE_TARGET_URL: postgres://postgres:postgres@127.0.0.1:5432/tacit_test_restore?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.4
+          cache: true
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - run: createdb --host 127.0.0.1 --username postgres tacit_test_restore
+      - run: ./scripts/test-postgres.sh
+      - run: ./scripts/verify-postgres-restore.sh
 
   web:
     runs-on: ubuntu-latest
