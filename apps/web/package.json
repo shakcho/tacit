@@ -1,0 +1,13 @@
+{
+  "name": "@tacit/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/workspace-placeholder.mjs build",
+    "generate": "node scripts/workspace-placeholder.mjs generate",
+    "lint": "node scripts/workspace-placeholder.mjs lint",
+    "test": "node --test",
+    "typecheck": "node scripts/workspace-placeholder.mjs typecheck"
+  }
+}

@@ -1,0 +1,46 @@
+name: Containers
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [api, web, speech]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/package/${{ matrix.image }}.Dockerfile
+          push: false
+          tags: tacit/${{ matrix.image }}:${{ github.sha }}
+          build-args: SOURCE_REVISION=${{ github.sha }}
+          outputs: type=docker,dest=/tmp/${{ matrix.image }}.tar
+          provenance: mode=max
+          sbom: true
+      - name: Inspect non-root image
+        shell: bash
+        run: |
+          docker load --input /tmp/${{ matrix.image }}.tar
+          configured_user="$(docker image inspect --format '{{.Config.User}}' tacit/${{ matrix.image }}:${{ github.sha }})"
+          test -n "$configured_user"
+          test "$configured_user" != "root"
+          test "$configured_user" != "0"
+      - uses: anchore/sbom-action@v0
+        with:
+          file: /tmp/${{ matrix.image }}.tar
+          format: spdx-json
+          output-file: /tmp/${{ matrix.image }}.spdx.json
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.image }}-sbom
+          path: /tmp/${{ matrix.image }}.spdx.json

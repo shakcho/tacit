@@ -1,0 +1,17 @@
+{
+  "name": "tacit",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.19.0",
+  "engines": {
+    "node": "26.13.1",
+    "pnpm": "12.19.0"
+  },
+  "scripts": {
+    "build": "pnpm --recursive build",
+    "generate": "pnpm --recursive generate",
+    "lint": "pnpm --recursive lint",
+    "test": "pnpm --recursive test",
+    "typecheck": "pnpm --recursive typecheck"
+  }
+}

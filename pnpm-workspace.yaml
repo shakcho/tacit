@@ -1,0 +1,7 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalogMode: strict
+
+strictPeerDependencies: true

@@ -1,0 +1,12 @@
+* @shakcho
+
+/apps/web/ @shakcho
+/packages/contracts/ @shakcho
+/internal/access/ @shakcho
+/internal/recordings/ @shakcho
+/internal/library/ @shakcho
+/internal/runtime/ @shakcho
+/internal/delivery/ @shakcho
+/protocols/ @shakcho
+/services/speech/ @shakcho
+/deploy/ @shakcho

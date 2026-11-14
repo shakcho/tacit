@@ -1,0 +1,7 @@
+apiVersion: v2
+name: tacit
+description: Workload chart for the Tacit control plane and workers
+type: application
+version: 0.1.0
+appVersion: "0.0.0"
+kubeVersion: ">=1.32.0-0"
