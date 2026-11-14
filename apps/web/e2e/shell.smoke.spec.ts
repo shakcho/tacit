@@ -5,7 +5,7 @@ import { scanAccessibility } from "./support/accessibility";
 test("authenticated shell renders and supports keyboard navigation", async ({ page }, testInfo) => {
   await page.goto("/meetings");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Meeting intelligence workspace" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Meetings, ready to review." })).toBeVisible();
   const productNavigation = page.locator('nav[aria-label="Product"]:visible');
   await expect(productNavigation).toBeVisible();
   await expect(productNavigation.getByRole("link", { name: "Meetings", exact: true })).toHaveAttribute("aria-current", "page");

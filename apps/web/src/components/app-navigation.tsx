@@ -35,7 +35,7 @@ export function DesktopNavigation() {
   const pathname = usePathname();
 
   return (
-    <nav aria-label="Product" className="mt-8 space-y-1">
+    <nav aria-label="Product" className="mt-3 space-y-1">
       {items.map((item) => {
         const current = isCurrentPath(pathname, item.href);
         const Icon = item.icon;
@@ -44,7 +44,7 @@ export function DesktopNavigation() {
           <Link
             aria-current={current ? "page" : undefined}
             className={cn(
-              "group flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-sidebar-muted transition-[background-color,color,transform] hover:translate-x-0.5 hover:bg-sidebar-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none",
+              "group flex min-h-11 items-center gap-3 rounded-lg px-3 text-[0.9375rem] font-medium text-sidebar-muted transition-[background-color,color,transform] hover:translate-x-0.5 hover:bg-sidebar-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none",
               current && "bg-sidebar-active text-sidebar-foreground",
             )}
             href={item.href}

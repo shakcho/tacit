@@ -1,4 +1,4 @@
-import { CircleHelp, Search } from "lucide-react";
+import { CircleHelp, MonitorUp, Search, Upload, Video } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -21,38 +21,70 @@ export function AppShell({ children }: AppShellProps) {
         Skip to content
       </a>
 
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-sidebar-border bg-sidebar px-5 py-6 text-sidebar-foreground md:flex md:flex-col">
-        <Link className="flex min-h-11 items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring" href="/meetings">
-          <BrandMark />
-          <span className="text-lg font-medium tracking-[-0.025em]">Tacit</span>
+      <aside className="fixed inset-y-0 left-0 hidden w-[15.5rem] border-r border-sidebar-border bg-sidebar p-4 text-sidebar-foreground md:flex md:flex-col">
+        <Link className="flex min-h-12 items-center gap-3 rounded-lg px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring" href="/meetings">
+          <BrandMark className="size-9" />
+          <span className="text-xl font-semibold tracking-[-0.04em]">tacit</span>
         </Link>
 
-        <div className="mt-6 rounded-lg border border-sidebar-border bg-sidebar-panel p-3">
-          <p className="text-xs font-medium text-sidebar-muted">Workspace</p>
-          <p className="mt-1 truncate text-sm font-medium">Tacit workspace</p>
-        </div>
+        <Link
+          className="mt-5 flex min-h-11 items-center gap-3 rounded-lg border border-sidebar-border bg-card px-3 text-sm text-sidebar-muted transition-colors hover:border-primary/30 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          href="/search"
+        >
+          <Search aria-hidden="true" className="size-[18px]" strokeWidth={1.8} />
+          <span>Search</span>
+          <kbd className="ml-auto rounded-md bg-muted px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground">⌘K</kbd>
+        </Link>
 
         <DesktopNavigation />
 
-        <div className="mt-auto space-y-1 border-t border-sidebar-border pt-4">
+        <section aria-labelledby="sources-title" className="mt-auto rounded-xl bg-sidebar-panel p-3">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-semibold text-sidebar-foreground" id="sources-title">Meeting sources</h2>
+            <span className="text-[0.6875rem] text-sidebar-muted">setup</span>
+          </div>
+          <div className="space-y-2.5 text-sm">
+            <div className="flex items-center gap-2.5">
+              <Video aria-hidden="true" className="size-4 text-primary" strokeWidth={1.8} />
+              <span>Zoom</span>
+              <span className="ml-auto text-xs text-sidebar-muted">planned</span>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <MonitorUp aria-hidden="true" className="size-4 text-primary" strokeWidth={1.8} />
+              <span>Microsoft Teams</span>
+              <span className="ml-auto text-xs text-sidebar-muted">planned</span>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <Upload aria-hidden="true" className="size-4 text-primary" strokeWidth={1.8} />
+              <span>File uploads</span>
+              <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-sidebar-muted">
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-emerald-500" /> ready
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <div className="mt-3 space-y-1 border-t border-sidebar-border pt-3">
           <Link className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring" href="/help">
             <CircleHelp aria-hidden="true" className="size-[18px]" strokeWidth={1.8} />
             Help
           </Link>
           <Link className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring" href="/profile">
-            <span aria-hidden="true" className="inline-flex size-7 items-center justify-center rounded-full bg-sidebar-active text-xs text-sidebar-foreground">A</span>
-            Account
+            <span aria-hidden="true" className="inline-flex size-8 items-center justify-center rounded-lg bg-foreground text-xs font-semibold text-background">AD</span>
+            <span>
+              <span className="block text-sm text-sidebar-foreground">Alex Demo</span>
+              <span className="block text-xs font-normal text-sidebar-muted">Demo workspace</span>
+            </span>
           </Link>
         </div>
       </aside>
 
-      <div className="md:pl-64">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-background px-4 sm:px-6 lg:px-10">
+      <div className="md:pl-[15.5rem]">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur sm:px-6 md:hidden">
           <Link className="flex min-h-11 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden" href="/meetings">
             <BrandMark className="size-7" />
-            <span className="font-medium tracking-tight">Tacit</span>
+            <span className="font-semibold tracking-[-0.03em]">tacit</span>
           </Link>
-          <p className="hidden text-sm font-medium text-muted-foreground md:block">Meeting workspace</p>
           <div className="flex items-center gap-2">
             <Link
               aria-label="Search workspace"
@@ -71,7 +103,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </header>
 
-        <main className="mx-auto min-h-[calc(100vh-4rem)] max-w-[92rem] px-4 py-8 pb-28 sm:px-6 lg:px-10 lg:py-10 md:pb-10" id="main-content" tabIndex={-1}>
+        <main className="mx-auto min-h-screen max-w-[100rem] px-4 py-7 pb-28 sm:px-6 md:px-8 md:py-9 md:pb-12 xl:px-12" id="main-content" tabIndex={-1}>
           {children}
         </main>
       </div>
