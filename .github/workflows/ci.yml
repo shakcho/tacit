@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: 26.13.1
       - run: corepack enable
-      - run: corepack prepare pnpm@12.19.0 --activate
+      - run: corepack prepare pnpm@10.33.2 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tacit/web check:toolchain
       - run: pnpm --recursive lint
@@ -89,7 +89,7 @@ jobs:
         with:
           node-version: 26.13.1
       - run: corepack enable
-      - run: corepack prepare pnpm@12.19.0 --activate
+      - run: corepack prepare pnpm@10.33.2 --activate
       - run: pnpm install --frozen-lockfile
       - run: ./scripts/check-generated.sh
 

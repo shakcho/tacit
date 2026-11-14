@@ -25,7 +25,7 @@ Install [mise](https://mise.jdx.dev/) and Docker, then run:
 ./scripts/bootstrap.sh
 ```
 
-The pinned toolchain is Go 1.27.4, Node 26.13.1 LTS, pnpm 12.19.0, Python 3.13.18 and uv 0.11.19. Python 3.13 is intentional: speech/CUDA compatibility is more important than using the newest Python feature release.
+The pinned toolchain is Go 1.27.4, Node 26.13.1 LTS, pnpm 10.33.2, Python 3.13.18 and uv 0.11.19. Python 3.13 is intentional: speech/CUDA compatibility is more important than using the newest Python feature release.
 
 Run the local CI equivalent at any time:
 
