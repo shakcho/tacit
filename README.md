@@ -33,6 +33,22 @@ Run the local CI equivalent at any time:
 ./scripts/verify.sh
 ```
 
+## Local development
+
+Start the current application processes together from the repository root:
+
+```bash
+pnpm dev
+```
+
+This starts the Next.js workspace at `http://127.0.0.1:3000/meetings` and the Go API shell at `http://127.0.0.1:8080`. The API currently exposes `GET /healthz`, `GET /readyz`, and an explicit `501 Not Implemented` GraphQL boundary until TAC-004 completes the control plane. Press `Ctrl+C` once to stop both processes.
+
+Override the default listeners when needed:
+
+```bash
+TACIT_WEB_PORT=3001 TACIT_API_ADDRESS=127.0.0.1:8081 pnpm dev
+```
+
 ## Branches
 
 Use one ticket branch at a time, named `tac-NNN-short-description`. Merge only after the ticket records `VERIFIED`.

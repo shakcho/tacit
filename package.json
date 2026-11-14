@@ -9,6 +9,9 @@
   },
   "scripts": {
     "build": "pnpm --recursive build",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "go run ./cmd/api",
+    "dev:web": "pnpm --filter @tacit/web dev",
     "generate": "pnpm --recursive generate",
     "lint": "pnpm --recursive lint",
     "test": "pnpm --recursive test",
