@@ -25,12 +25,28 @@ Install [mise](https://mise.jdx.dev/) and Docker, then run:
 ./scripts/bootstrap.sh
 ```
 
-The pinned toolchain is Go 1.27.4, Node 26.13.1 LTS, pnpm 12.19.0, Python 3.13.18 and uv 0.11.19. Python 3.13 is intentional: speech/CUDA compatibility is more important than using the newest Python feature release.
+The pinned toolchain is Go 1.27.4, Node 26.13.1 LTS, pnpm 10.33.2, Python 3.13.18 and uv 0.11.19. Python 3.13 is intentional: speech/CUDA compatibility is more important than using the newest Python feature release.
 
 Run the local CI equivalent at any time:
 
 ```bash
 ./scripts/verify.sh
+```
+
+## Local development
+
+Start the current application processes together from the repository root:
+
+```bash
+pnpm dev
+```
+
+This starts the Next.js workspace at `http://127.0.0.1:3000/meetings` and the Go API shell at `http://127.0.0.1:8080`. The API currently exposes `GET /healthz`, `GET /readyz`, and an explicit `501 Not Implemented` GraphQL boundary until TAC-004 completes the control plane. Press `Ctrl+C` once to stop both processes.
+
+Override the default listeners when needed:
+
+```bash
+TACIT_WEB_PORT=3001 TACIT_API_ADDRESS=127.0.0.1:8081 pnpm dev
 ```
 
 ## Branches

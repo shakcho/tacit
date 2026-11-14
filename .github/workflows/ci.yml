@@ -39,12 +39,30 @@ jobs:
         with:
           node-version: 26.13.1
       - run: corepack enable
-      - run: corepack prepare pnpm@12.19.0 --activate
+      - run: corepack prepare pnpm@10.33.2 --activate
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @tacit/web check:toolchain
       - run: pnpm --recursive lint
       - run: pnpm --recursive typecheck
       - run: pnpm --recursive test
-      - run: pnpm --recursive build
+      - name: Production build with environment canary
+        run: pnpm --recursive build
+        env:
+          NEXT_PUBLIC_GRAPHQL_PATH: /graphql
+          TACIT_PRIVATE_BUNDLE_CANARY: tacit-private-${{ github.sha }}
+      - run: pnpm --filter @tacit/web check:environment
+        env:
+          TACIT_PRIVATE_BUNDLE_CANARY: tacit-private-${{ github.sha }}
+      - run: pnpm --filter @tacit/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @tacit/web test:e2e
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: web-playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
 
   python:
     runs-on: ubuntu-latest
@@ -71,7 +89,7 @@ jobs:
         with:
           node-version: 26.13.1
       - run: corepack enable
-      - run: corepack prepare pnpm@12.19.0 --activate
+      - run: corepack prepare pnpm@10.33.2 --activate
       - run: pnpm install --frozen-lockfile
       - run: ./scripts/check-generated.sh
 
