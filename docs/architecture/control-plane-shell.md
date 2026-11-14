@@ -80,7 +80,7 @@ The in-memory adapter owns sample and idempotency indexes under one mutex. Its s
 
 ## Frontend generation
 
-`apps/web/orval.config.ts` reads the canonical OpenAPI document and writes committed code under `apps/web/src/api/generated`. The generated surface includes:
+`apps/web/orval.config.ts` reads the canonical OpenAPI document and writes disposable code under the ignored `apps/web/src/api/generated` directory. The generated surface includes:
 
 - Fetch request functions;
 - TanStack Query hooks and query keys;
@@ -91,7 +91,7 @@ The in-memory adapter owns sample and idempotency indexes under one mutex. Its s
 
 The application owns one `QueryClient` through `QueryProvider`. Product features consume generated hooks; they do not hand-build URLs or duplicate response types.
 
-`pnpm generate` is deterministic. `scripts/check-generated.sh` regenerates the client and fails on modified or untracked generated files.
+Orval is pinned in the workspace lockfile. `pnpm generate` is deterministic, and development, CI and the web container run it before consuming the client. `scripts/check-generated.sh` rejects committed Orval output and verifies that generation produces the expected hooks.
 
 ## Process lifecycle
 
@@ -118,7 +118,7 @@ internal/runtime/shellsample    domain values, outcomes, and Samples interface
 internal/adapters/httpapi       OpenAPI document, HTTP decoding, and response mapping
 internal/platform/memory        bounded process-local Samples implementation
 internal/platform/process       probes, admission, correlation, logging, and drain
-apps/web/src/api/generated      committed Orval/TanStack Query client
+apps/web/src/api/generated      ignored Orval/TanStack Query build output
 ```
 
 Domain packages cannot import HTTP, adapters, platform implementations, SQL, or vendor SDKs. The repository boundary check enforces adapter and platform exclusions for every domain root.
@@ -141,12 +141,12 @@ Exactly one Go generator will be selected before the first product aggregate is 
 
 - Purpose-built read models replace arbitrary client-selected field graphs. This keeps authorization, performance, and caching visible in the contract at the cost of adding an endpoint when a genuinely new view is required.
 - SSE is one-way by design. It matches invalidation plus canonical refetch and avoids a bidirectional socket protocol that the product does not currently require.
-- Orval output is committed. Diffs are larger, but frontend and API contract changes remain reviewable and CI can detect drift.
+- Orval output is disposable. Reviews focus on the OpenAPI source, generator configuration and handwritten transport policy; a pinned generator reproduces hooks in CI and builds.
 - The temporary shell sample is not a product model and will be removed after real aggregates prove the same boundary.
 
 ## Verification
 
-- Generate the Orval client and verify a clean working tree for generated paths.
+- Generate the Orval client from a clean checkout and verify that no generated hook is tracked by Git.
 - Exercise create, replay, lookup, conflicts, invalid inputs, unknown JSON fields, unsupported content types, and oversized bodies.
 - Confirm every problem response has `application/problem+json` and a stable code.
 - Run boundary, Go, TypeScript, lint, and component tests.

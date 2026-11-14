@@ -30,3 +30,4 @@ __pycache__/
 *.p12
 *.tfstate
 *.tfstate.*
+/apps/web/src/api/generated/

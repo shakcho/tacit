@@ -42,13 +42,14 @@ jobs:
       - run: corepack prepare pnpm@10.33.2 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tacit/web check:toolchain
+      - run: pnpm --recursive generate
       - run: pnpm --recursive lint
       - run: pnpm --recursive typecheck
       - run: pnpm --recursive test
       - name: Production build with environment canary
         run: pnpm --recursive build
         env:
-          NEXT_PUBLIC_GRAPHQL_PATH: /graphql
+          NEXT_PUBLIC_API_BASE_PATH: /api
           TACIT_PRIVATE_BUNDLE_CANARY: tacit-private-${{ github.sha }}
       - run: pnpm --filter @tacit/web check:environment
         env:

@@ -9,6 +9,7 @@
     "check:toolchain": "node scripts/check-toolchain.mjs",
     "dev": "next dev",
     "generate": "orval --config ./orval.config.ts",
+    "predev": "pnpm generate",
     "lint": "eslint .",
     "start": "next start",
     "test": "vitest run",

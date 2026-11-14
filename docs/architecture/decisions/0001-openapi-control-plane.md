@@ -25,6 +25,8 @@ Use OpenAPI as the source of truth for product HTTP operations.
 
 OpenAPI becomes a reusable contract for browser, mobile, CLI, connector, webhook, and test consumers. HTTP caching, status codes, conditional requests, uploads, downloads, and observability route names remain explicit. Orval supplies generated query hooks and query keys without requiring Apollo's normalized graph cache.
 
+Orval output is ignored rather than committed. The OpenAPI contract, Orval configuration, pinned package version and handwritten fetch policy are the reviewed inputs; development, CI and container builds regenerate the TanStack Query client before type checking or bundling.
+
 Tacit gives up arbitrary per-client field selection. When a screen needs a materially different aggregate shape, the API adds a purpose-built read model. Realtime is intentionally one-way; any future bidirectional use case must justify a separate protocol rather than extending SSE beyond its role.
 
 The GraphQL-specific TAC-004 and TAC-010 text, generation checks, environment variables, and lifecycle assumptions must be replaced. Transport-independent domain and process behavior remains valid.

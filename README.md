@@ -2,7 +2,7 @@
 
 Tacit is the behavior-preserving rewrite of Listener: a Go control plane, Next.js web application, PostgreSQL canonical state, managed identity, Kubernetes workers, Zoom and Microsoft Teams connectors, owned speech-to-text, async media processing, and evidence-linked AI assistance.
 
-This repository is a monorepo so application code, worker protocols, deployment contracts and generated clients change atomically.
+This repository is a monorepo so application code, worker protocols, deployment contracts, OpenAPI sources and pinned generators change atomically. Disposable frontend clients are generated from those sources during development, CI and container builds.
 
 ## Repository map
 
@@ -11,7 +11,7 @@ This repository is a monorepo so application code, worker protocols, deployment 
 | `apps/web` | Next.js web application and owned Tailwind/shadcn system |
 | `cmd` | Go process entry points |
 | `internal` | Go domain modules and private platform adapters |
-| `packages/contracts` | Generated web clients and shared wire artifacts |
+| `packages/contracts` | Shared wire artifacts used by more than one workspace |
 | `protocols` | Versioned cross-language protobuf/JSON contracts |
 | `services/speech` | Python/CUDA inference boundary |
 | `deploy/charts` | Kubernetes Helm charts |
