@@ -10,6 +10,11 @@ coverage/
 dist/
 bin/
 .cache/
+.taste-skill/
+.playwright/
+playwright-report/
+test-results/
+*.tsbuildinfo
 .mise-data/
 .python-version
 .venv/
