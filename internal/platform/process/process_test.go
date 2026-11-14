@@ -1,37 +1,83 @@
 package process
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func start(t *testing.T, bound time.Duration, factory HandlerFactory) (string, context.CancelFunc, <-chan error) {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+type memoryAddress string
+
+func (address memoryAddress) Network() string { return "memory" }
+func (address memoryAddress) String() string  { return string(address) }
+
+type memoryListener struct {
+	connections chan net.Conn
+	closed      chan struct{}
+	closeOnce   sync.Once
+}
+
+func newMemoryListener() *memoryListener {
+	return &memoryListener{connections: make(chan net.Conn), closed: make(chan struct{})}
+}
+
+func (listener *memoryListener) Accept() (net.Conn, error) {
+	select {
+	case connection := <-listener.connections:
+		return connection, nil
+	case <-listener.closed:
+		return nil, net.ErrClosed
 	}
+}
+
+func (listener *memoryListener) Close() error {
+	listener.closeOnce.Do(func() { close(listener.closed) })
+	return nil
+}
+
+func (listener *memoryListener) Addr() net.Addr { return memoryAddress("tacit.test") }
+
+func (listener *memoryListener) dial(ctx context.Context, _, _ string) (net.Conn, error) {
+	server, client := net.Pipe()
+	select {
+	case listener.connections <- server:
+		return client, nil
+	case <-listener.closed:
+		_ = server.Close()
+		_ = client.Close()
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		_ = server.Close()
+		_ = client.Close()
+		return nil, ctx.Err()
+	}
+}
+
+func start(t *testing.T, bound time.Duration, factory HandlerFactory) (*http.Client, context.CancelFunc, <-chan error) {
+	t.Helper()
+	listener := newMemoryListener()
+	transport := &http.Transport{DialContext: listener.dial}
+	client := &http.Client{Transport: transport}
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
 		result <- serve(ctx, Config{Role: "test", DrainTimeout: bound, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, listener, factory)
 	}()
-	t.Cleanup(cancel)
-	return listener.Addr().String(), cancel, result
+	t.Cleanup(func() {
+		cancel()
+		client.CloseIdleConnections()
+	})
+	return client, cancel, result
 }
 
 func awaitResult(t *testing.T, result <-chan error, want error) {
@@ -49,19 +95,16 @@ func awaitResult(t *testing.T, result <-chan error, want error) {
 func TestHTTPDrainCompletesActiveRequest(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	ready := make(chan *lifecycle, 1)
-	address, cancel, result := start(t, time.Second, func(tracker SocketTracker) http.Handler {
-		ready <- tracker.(*lifecycle)
+	client, cancel, result := start(t, time.Second, func() http.Handler {
 		return http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			close(started)
 			<-release
 			_, _ = response.Write([]byte("completed"))
 		})
 	})
-	life := <-ready
 	responseBody := make(chan string, 1)
 	go func() {
-		response, err := http.Get("http://" + address + "/graphql")
+		response, err := client.Get("http://tacit.test/v1/shell-samples/sample")
 		if err != nil {
 			responseBody <- err.Error()
 			return
@@ -72,25 +115,6 @@ func TestHTTPDrainCompletesActiveRequest(t *testing.T) {
 	}()
 	<-started
 	cancel()
-	deadline := time.Now().Add(time.Second)
-	for life.ready() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	for _, test := range []struct {
-		path   string
-		status int
-		body   string
-	}{
-		{"/healthz", http.StatusOK, "{\"status\":\"ok\"}\n"},
-		{"/readyz", http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"/graphql", http.StatusServiceUnavailable, "{\"code\":\"UNAVAILABLE\",\"message\":\"Service unavailable.\"}\n"},
-	} {
-		response := httptest.NewRecorder()
-		life.handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("drain admitted application work") })).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
-		if response.Code != test.status || response.Body.String() != test.body {
-			t.Errorf("%s during drain = %d %s", test.path, response.Code, response.Body.String())
-		}
-	}
 	close(release)
 	if body := <-responseBody; body != "completed" {
 		t.Fatalf("active HTTP response = %q", body)
@@ -98,10 +122,35 @@ func TestHTTPDrainCompletesActiveRequest(t *testing.T) {
 	awaitResult(t, result, nil)
 }
 
+func TestLifecycleRejectsTrafficDuringDrain(t *testing.T) {
+	life := newLifecycle()
+	life.drain()
+	for _, test := range []struct {
+		path   string
+		status int
+	}{
+		{"/healthz", http.StatusOK},
+		{"/readyz", http.StatusServiceUnavailable},
+		{"/v1/shell-samples/sample", http.StatusServiceUnavailable},
+	} {
+		response := httptest.NewRecorder()
+		life.handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("drain admitted application work") })).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != test.status {
+			t.Errorf("%s during drain = %d %s", test.path, response.Code, response.Body.String())
+		}
+		if test.path == "/healthz" && response.Body.String() != "{\"status\":\"ok\"}\n" {
+			t.Errorf("health during drain = %s", response.Body.String())
+		}
+		if test.path != "/healthz" && (response.Header().Get("Content-Type") != "application/problem+json" || !strings.Contains(response.Body.String(), `"code":"UNAVAILABLE"`)) {
+			t.Errorf("%s problem = %v %s", test.path, response.Header(), response.Body.String())
+		}
+	}
+}
+
 func TestHTTPDrainForceCancelsAtDeadline(t *testing.T) {
 	started := make(chan struct{})
 	canceled := make(chan struct{})
-	address, cancel, result := start(t, 50*time.Millisecond, func(SocketTracker) http.Handler {
+	client, cancel, result := start(t, 50*time.Millisecond, func() http.Handler {
 		return http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 			close(started)
 			<-request.Context().Done()
@@ -111,7 +160,7 @@ func TestHTTPDrainForceCancelsAtDeadline(t *testing.T) {
 	requestDone := make(chan struct{})
 	go func() {
 		defer close(requestDone)
-		response, err := http.Get("http://" + address + "/graphql")
+		response, err := client.Get("http://tacit.test/v1/shell-samples/sample")
 		if err == nil {
 			_ = response.Body.Close()
 		}
@@ -127,93 +176,8 @@ func TestHTTPDrainForceCancelsAtDeadline(t *testing.T) {
 	<-requestDone
 }
 
-func websocket(t *testing.T, address string) net.Conn {
-	t.Helper()
-	connection, err := net.DialTimeout("tcp", address, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = connection.Close() })
-	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	_, err = fmt.Fprintf(connection, "GET /graphql HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodGet})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusSwitchingProtocols || response.Header.Get("Sec-WebSocket-Accept") != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
-		t.Fatalf("WebSocket handshake = %d %v", response.StatusCode, response.Header)
-	}
-	return connection
-}
-
-func TestWebSocketDrain(t *testing.T) {
-	for _, graceful := range []bool{true, false} {
-		t.Run(fmt.Sprint(graceful), func(t *testing.T) {
-			registered := make(chan struct{})
-			operationCanceled := make(chan struct{})
-			address, cancel, result := start(t, 50*time.Millisecond, func(tracker SocketTracker) http.Handler {
-				return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-					connection, buffer, err := http.NewResponseController(response).Hijack()
-					if err != nil {
-						t.Error(err)
-						return
-					}
-					operation, cancelOperation := context.WithCancel(request.Context())
-					defer cancelOperation()
-					release, accepted := tracker.Register(connection, cancelOperation)
-					if !accepted {
-						_ = connection.Close()
-						return
-					}
-					defer release()
-					defer connection.Close()
-					hash := sha1.Sum([]byte(request.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-					_, _ = fmt.Fprintf(buffer, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(hash[:]))
-					_ = buffer.Flush()
-					close(registered)
-					<-operation.Done()
-					close(operationCanceled)
-					if !graceful {
-						_, _ = connection.Read(make([]byte, 1))
-					}
-				})
-			})
-			connection := websocket(t, address)
-			<-registered
-			cancel()
-			if graceful {
-				awaitResult(t, result, nil)
-			} else {
-				awaitResult(t, result, context.DeadlineExceeded)
-			}
-			select {
-			case <-operationCanceled:
-			default:
-				t.Fatal("socket operation was not canceled")
-			}
-			if _, err := connection.Read(make([]byte, 1)); err != io.EOF {
-				t.Fatalf("socket was not closed: %v", err)
-			}
-		})
-	}
-}
-
-func TestDrainingRejectsSocketRegistration(t *testing.T) {
-	life := newLifecycle()
-	life.drain()
-	connection, other := net.Pipe()
-	defer connection.Close()
-	defer other.Close()
-	if _, accepted := life.Register(connection, func() {}); accepted {
-		t.Fatal("drain accepted socket")
-	}
-}
-
 func TestRunRejectsInvalidDrainTimeoutBeforeListening(t *testing.T) {
-	err := Run(context.Background(), Config{Listen: "127.0.0.1:0"}, func(SocketTracker) http.Handler {
+	err := Run(context.Background(), Config{Listen: "127.0.0.1:0"}, func() http.Handler {
 		t.Fatal("invalid configuration built a handler")
 		return http.NotFoundHandler()
 	})

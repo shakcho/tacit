@@ -1,14 +1,13 @@
 package process
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type requestIDKey struct{}
@@ -59,9 +58,12 @@ func safeMethod(method string) string {
 
 func route(path string) string {
 	switch path {
-	case "/healthz", "/readyz", "/graphql":
+	case "/healthz", "/readyz", "/openapi.yaml", "/v1/shell-samples":
 		return path
 	default:
+		if strings.HasPrefix(path, "/v1/shell-samples/") && !strings.Contains(strings.TrimPrefix(path, "/v1/shell-samples/"), "/") {
+			return "/v1/shell-samples/{sampleId}"
+		}
 		return "unmatched"
 	}
 }
@@ -89,12 +91,3 @@ func (writer *statusWriter) Write(data []byte) (int, error) {
 }
 
 func (writer *statusWriter) Unwrap() http.ResponseWriter { return writer.ResponseWriter }
-
-func (writer *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	connection, buffer, err := http.NewResponseController(writer.ResponseWriter).Hijack()
-	if err == nil {
-		writer.status = http.StatusSwitchingProtocols
-		writer.wrote = true
-	}
-	return connection, buffer, err
-}

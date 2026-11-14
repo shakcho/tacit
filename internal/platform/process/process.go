@@ -19,11 +19,7 @@ type Config struct {
 	Logger       *slog.Logger
 }
 
-type SocketTracker interface {
-	Register(io.Closer, context.CancelFunc) (release func(), accepted bool)
-}
-
-type HandlerFactory func(SocketTracker) http.Handler
+type HandlerFactory func() http.Handler
 
 type phase uint8
 
@@ -33,40 +29,13 @@ const (
 	stopped
 )
 
-type socket struct {
-	connection io.Closer
-	cancel     context.CancelFunc
-}
-
 type lifecycle struct {
-	mu      sync.Mutex
-	phase   phase
-	nextID  uint64
-	sockets map[uint64]socket
-	empty   chan struct{}
+	mu    sync.Mutex
+	phase phase
 }
 
 func newLifecycle() *lifecycle {
-	return &lifecycle{sockets: make(map[uint64]socket), empty: make(chan struct{})}
-}
-
-func (life *lifecycle) Register(connection io.Closer, cancel context.CancelFunc) (func(), bool) {
-	life.mu.Lock()
-	defer life.mu.Unlock()
-	if life.phase != serving {
-		return nil, false
-	}
-	life.nextID++
-	id := life.nextID
-	life.sockets[id] = socket{connection: connection, cancel: cancel}
-	return sync.OnceFunc(func() {
-		life.mu.Lock()
-		defer life.mu.Unlock()
-		delete(life.sockets, id)
-		if life.phase == draining && len(life.sockets) == 0 {
-			close(life.empty)
-		}
-	}), true
+	return &lifecycle{}
 }
 
 func (life *lifecycle) ready() bool {
@@ -78,30 +47,13 @@ func (life *lifecycle) ready() bool {
 func (life *lifecycle) drain() {
 	life.mu.Lock()
 	life.phase = draining
-	sockets := make([]socket, 0, len(life.sockets))
-	for _, socket := range life.sockets {
-		sockets = append(sockets, socket)
-	}
-	if len(sockets) == 0 {
-		close(life.empty)
-	}
 	life.mu.Unlock()
-	for _, socket := range sockets {
-		socket.cancel()
-	}
 }
 
-func (life *lifecycle) closeSockets() {
+func (life *lifecycle) stop() {
 	life.mu.Lock()
 	life.phase = stopped
-	sockets := make([]socket, 0, len(life.sockets))
-	for _, socket := range life.sockets {
-		sockets = append(sockets, socket)
-	}
 	life.mu.Unlock()
-	for _, socket := range sockets {
-		_ = socket.connection.Close()
-	}
 }
 
 func (life *lifecycle) handler(application http.Handler) http.Handler {
@@ -115,13 +67,13 @@ func (life *lifecycle) handler(application http.Handler) http.Handler {
 				if life.ready() {
 					writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 				} else {
-					writeJSON(response, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+					writeUnavailable(response, request)
 				}
 				return
 			}
 		}
 		if !life.ready() {
-			writeJSON(response, http.StatusServiceUnavailable, map[string]string{"code": "UNAVAILABLE", "message": "Service unavailable."})
+			writeUnavailable(response, request)
 			return
 		}
 		application.ServeHTTP(response, request)
@@ -144,7 +96,7 @@ func serve(ctx context.Context, cfg Config, listener net.Listener, factory Handl
 		cfg.Logger = slog.Default()
 	}
 	life := newLifecycle()
-	application := factory(life)
+	application := factory()
 	requestContext, cancelRequests := context.WithCancel(context.Background())
 	defer cancelRequests()
 	server := &http.Server{
@@ -168,36 +120,50 @@ func serve(ctx context.Context, cfg Config, listener net.Listener, factory Handl
 	drainContext, cancel := context.WithTimeout(context.Background(), cfg.DrainTimeout)
 	defer cancel()
 	life.drain()
-	httpDrained := make(chan struct{})
+	httpDrained := make(chan error, 1)
 	go func() {
-		_ = server.Shutdown(drainContext)
-		close(httpDrained)
+		httpDrained <- server.Shutdown(drainContext)
 	}()
-	socketsDrained := life.empty
-	for httpDrained != nil || socketsDrained != nil {
-		select {
-		case <-httpDrained:
-			httpDrained = nil
-		case <-socketsDrained:
-			socketsDrained = nil
-		case <-drainContext.Done():
-			cancelRequests()
-			_ = server.Close()
-			life.closeSockets()
-			cfg.Logger.Info("process stopped", "role", cfg.Role, "drained", false)
-			return errors.Join(serveError, drainContext.Err())
+	select {
+	case shutdownError := <-httpDrained:
+		life.stop()
+		cfg.Logger.Info("process stopped", "role", cfg.Role, "drained", true)
+		if errors.Is(serveError, http.ErrServerClosed) {
+			serveError = nil
 		}
+		return errors.Join(serveError, shutdownError)
+	case <-drainContext.Done():
+		cancelRequests()
+		_ = server.Close()
+		life.stop()
+		cfg.Logger.Info("process stopped", "role", cfg.Role, "drained", false)
+		return errors.Join(serveError, drainContext.Err())
 	}
-	life.closeSockets()
-	cfg.Logger.Info("process stopped", "role", cfg.Role, "drained", true)
-	if errors.Is(serveError, http.ErrServerClosed) {
-		return nil
-	}
-	return serveError
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
+	_ = json.NewEncoder(response).Encode(value)
+}
+
+func writeUnavailable(response http.ResponseWriter, request *http.Request) {
+	value := struct {
+		Type      string `json:"type"`
+		Title     string `json:"title"`
+		Status    int    `json:"status"`
+		Detail    string `json:"detail"`
+		Code      string `json:"code"`
+		RequestID string `json:"requestId,omitempty"`
+	}{
+		Type:      "https://api.tacit.dev/problems/unavailable",
+		Title:     "Service unavailable",
+		Status:    http.StatusServiceUnavailable,
+		Detail:    "The operation cannot be completed by this process.",
+		Code:      "UNAVAILABLE",
+		RequestID: RequestID(request.Context()),
+	}
+	response.Header().Set("Content-Type", "application/problem+json")
+	response.WriteHeader(value.Status)
 	_ = json.NewEncoder(response).Encode(value)
 }

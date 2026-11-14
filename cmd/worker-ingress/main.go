@@ -30,7 +30,7 @@ func main() {
 	defer stop()
 	if err := process.Run(ctx, process.Config{
 		Role: "worker-ingress", Listen: *listenAddress, DrainTimeout: *drainTimeout, Logger: logger,
-	}, func(process.SocketTracker) http.Handler { return http.NotFoundHandler() }); err != nil {
+	}, func() http.Handler { return http.NotFoundHandler() }); err != nil {
 		logger.Error("process failed", "role", "worker-ingress")
 		os.Exit(1)
 	}

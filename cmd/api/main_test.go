@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,14 +19,22 @@ func TestDefaultListenAddress(t *testing.T) {
 	}
 }
 
-func TestGraphQLShellReportsNotImplemented(t *testing.T) {
+func TestOpenAPIControlPlaneShell(t *testing.T) {
 	t.Parallel()
 
-	request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/shell-samples", strings.NewReader(`{"id":"smp_0123456789abcdef0123456789abcdef","offsetMicroseconds":"0"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "main-test")
 	response := httptest.NewRecorder()
 	newHandler().ServeHTTP(response, request)
 
-	if response.Code != http.StatusNotImplemented {
-		t.Fatalf("expected status %d, got %d", http.StatusNotImplemented, response.Code)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"replayed":false`)) {
+		t.Fatalf("create = %d %s", response.Code, response.Body.String())
+	}
+
+	legacy := httptest.NewRecorder()
+	newHandler().ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/graphql", nil))
+	if legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy GraphQL route = %d", legacy.Code)
 	}
 }
