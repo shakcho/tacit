@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = join(workspace, "src");
-const allowedPublicVariables = new Set(["NEXT_PUBLIC_GRAPHQL_PATH"]);
+const allowedPublicVariables = new Set(["NEXT_PUBLIC_API_BASE_PATH"]);
 const privateVariableNames = [
   "DATABASE_URL",
   "TACIT_API_ORIGIN",

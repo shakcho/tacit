@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import type { ReactNode } from "react";
 
+import { QueryProvider } from "@/components/query-provider";
+
 import "./globals.css";
 
 const geistSans = localFont({
@@ -42,7 +44,9 @@ type RootLayoutProps = {
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html className={geistSans.variable} data-buttons="solid" data-radius="soft" data-type="software" lang="en">
-      <body>{children}</body>
+      <body>
+        <QueryProvider>{children}</QueryProvider>
+      </body>
     </html>
   );
 }

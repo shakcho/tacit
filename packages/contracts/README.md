@@ -1,5 +1,5 @@
 # Generated contracts
 
-Generated TypeScript GraphQL/protocol clients belong here. Source schemas remain in the owning Go module or `protocols`; hand-authored product policy does not belong in this package.
+Cross-application wire artifacts belong here when more than one workspace consumes them. Hand-authored product policy does not.
 
-TAC-003 establishes a deterministic registry of named GraphQL documents from `apps/web/src`. The schema-owning API ticket can replace this narrow registry with schema-derived result and variable types without moving document ownership out of the feature that uses each operation.
+The control-plane OpenAPI source is owned by `internal/adapters/httpapi/openapi.yaml`. Orval generates the Next.js client next to its only current consumer under `apps/web/src/api/generated`. Move stable generated models into this package when a second TypeScript application needs them; do not copy the OpenAPI source.

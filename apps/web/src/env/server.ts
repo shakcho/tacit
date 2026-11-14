@@ -3,7 +3,7 @@ export type ServerEnvironment = Readonly<{
 }>;
 
 function parseServerURL(input: string | undefined): URL {
-  if (input === undefined || input.length === 0) return new URL("http://api:8080");
+  if (input === undefined || input.length === 0) return new URL("http://127.0.0.1:8080");
 
   const value = new URL(input);
   if (value.protocol !== "http:" && value.protocol !== "https:") {

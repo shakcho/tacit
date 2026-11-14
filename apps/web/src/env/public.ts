@@ -1,15 +1,17 @@
-const defaultGraphQLPath = "/graphql";
+const defaultAPIBasePath = "/api";
 
 export type PublicEnvironment = Readonly<{
-  graphQLPath: string;
+  apiBasePath: string;
 }>;
 
 function parsePublicPath(input: string | undefined): string {
-  if (input === undefined || input.length === 0) return defaultGraphQLPath;
-  if (!input.startsWith("/")) throw new Error("NEXT_PUBLIC_GRAPHQL_PATH must be a root-relative path");
+  if (input === undefined || input.length === 0) return defaultAPIBasePath;
+  if (!input.startsWith("/") || input.startsWith("//") || (input.length > 1 && input.endsWith("/"))) {
+    throw new Error("NEXT_PUBLIC_API_BASE_PATH must be a root-relative path without a trailing slash");
+  }
   return input;
 }
 
 export const publicEnvironment: PublicEnvironment = Object.freeze({
-  graphQLPath: parsePublicPath(process.env.NEXT_PUBLIC_GRAPHQL_PATH),
+  apiBasePath: parsePublicPath(process.env.NEXT_PUBLIC_API_BASE_PATH),
 });
