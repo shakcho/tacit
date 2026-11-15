@@ -15,6 +15,6 @@
 - `internal/adapters` translates external wire formats and contains no product policy.
 - `internal/platform` implements storage, broker and infrastructure interfaces defined by owner modules.
 - Cross-language work uses a versioned contract under `protocols`; workers never update canonical product tables directly.
-- Generated files are committed. CI regenerates them and rejects drift.
+- Canonical contracts and pinned generators are committed. Disposable generated clients are ignored and regenerated in development, CI, and container builds.
 
 See [the boundary manifest](docs/architecture/boundaries.json) for the machine-enforced rules.
