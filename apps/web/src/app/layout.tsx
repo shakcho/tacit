@@ -3,8 +3,6 @@ import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 
-import { QueryProvider } from "@/components/query-provider";
-
 import "./globals.css";
 
 const geistSans = localFont({
@@ -57,7 +55,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
     <html className={geistSans.variable} data-buttons="solid" data-radius="soft" data-type="software" lang="en">
       <body>
         <AuthKitProvider initialAuth={authConfigured ? undefined : { user: null }} onSessionExpired={authConfigured ? undefined : false}>
-          <QueryProvider>{children}</QueryProvider>
+          {children}
         </AuthKitProvider>
       </body>
     </html>

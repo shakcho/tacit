@@ -175,9 +175,23 @@ func (handler *Handler) getShellSample(response http.ResponseWriter, request *ht
 }
 
 type authenticationSessionResponse struct {
-	OrganizationID string   `json:"organizationId"`
-	Roles          []string `json:"roles"`
-	UserID         string   `json:"userId"`
+	Authorization  authorizationSnapshotResponse `json:"authorization"`
+	OrganizationID string                        `json:"organizationId"`
+	Roles          []string                      `json:"roles"`
+	UserID         string                        `json:"userId"`
+}
+
+type authorizationSnapshotResponse struct {
+	PolicyRevision string                          `json:"policyRevision"`
+	Decisions      []authorizationDecisionResponse `json:"decisions"`
+}
+
+type authorizationDecisionResponse struct {
+	Action   string `json:"action"`
+	Allowed  bool   `json:"allowed"`
+	Resource string `json:"resource"`
+	Scope    string `json:"scope"`
+	Subject  string `json:"subject"`
 }
 
 func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, request *http.Request) {
@@ -186,15 +200,34 @@ func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, r
 		writeProblem(response, request, *problem)
 		return
 	}
-	roleValues := principal.Roles.Values()
+	roleValues := principal.Roles().Values()
 	roles := make([]string, 0, len(roleValues))
 	for _, role := range roleValues {
 		roles = append(roles, role.String())
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, http.StatusOK, authenticationSessionResponse{
-		OrganizationID: principal.Organization.String(), Roles: roles, UserID: principal.User.String(),
+		Authorization:  authorizationSnapshot(access.ContextDecisions(principal)),
+		OrganizationID: principal.OrganizationID().String(),
+		Roles:          roles,
+		UserID:         principal.UserID().String(),
 	})
+}
+
+func authorizationSnapshot(decisions access.DecisionSet) authorizationSnapshotResponse {
+	values := decisions.Decisions()
+	response := authorizationSnapshotResponse{
+		PolicyRevision: access.PolicyRevision,
+		Decisions:      make([]authorizationDecisionResponse, 0, len(values)),
+	}
+	for _, decision := range values {
+		response.Decisions = append(response.Decisions, authorizationDecisionResponse{
+			Action: decision.Action().String(), Allowed: decision.Allowed(),
+			Resource: decision.Resource().String(), Scope: decision.Scope().String(),
+			Subject: decision.Subject().String(),
+		})
+	}
+	return response
 }
 
 func (handler *Handler) denyAuthenticationSession(response http.ResponseWriter, request *http.Request) {

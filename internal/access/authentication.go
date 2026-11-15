@@ -146,6 +146,13 @@ type VerifiedIdentity struct {
 	ExpiresAt    time.Time
 }
 
+func (identity VerifiedIdentity) ValidAt(now time.Time) bool {
+	return identity.Namespace.String() != "" && identity.Subject.String() != "" &&
+		identity.Organization.String() != "" && identity.Session.String() != "" &&
+		!identity.IssuedAt.IsZero() && !identity.ExpiresAt.IsZero() &&
+		!now.IsZero() && identity.ExpiresAt.After(identity.IssuedAt) && identity.ExpiresAt.After(now)
+}
+
 type organizationTargetKind uint8
 
 const (
@@ -178,13 +185,46 @@ func (target OrganizationTarget) Organization() (OrganizationID, bool) {
 }
 
 func (target OrganizationTarget) Valid() bool {
-	return target.kind == targetTokenOrganization || target.kind == targetExactOrganization
+	return target.kind == targetTokenOrganization ||
+		(target.kind == targetExactOrganization && target.organization.Valid())
 }
 
-type LocalPrincipal struct {
+type LocalAdmission struct {
 	User         UserID
 	Organization OrganizationID
 	Roles        Roles
+}
+
+func (admission LocalAdmission) Valid() bool {
+	return admission.User.Valid() && admission.Organization.Valid() && admission.Roles.Valid()
+}
+
+type LocalPrincipal struct {
+	identity  VerifiedIdentity
+	admission LocalAdmission
+	valid     bool
+}
+
+func (principal LocalPrincipal) UserID() UserID { return principal.admission.User }
+func (principal LocalPrincipal) OrganizationID() OrganizationID {
+	return principal.admission.Organization
+}
+func (principal LocalPrincipal) Roles() Roles { return principal.admission.Roles }
+
+func (principal LocalPrincipal) RevalidationIdentity() (VerifiedIdentity, bool) {
+	return principal.identity, principal.valid
+}
+
+func (principal LocalPrincipal) ValidAt(now time.Time) bool {
+	return principal.valid && principal.admission.Valid() && principal.identity.ValidAt(now)
+}
+
+func (principal LocalPrincipal) Revalidated(admission LocalAdmission) (LocalPrincipal, bool) {
+	if !principal.valid || !admission.Valid() || admission.User != principal.admission.User ||
+		admission.Organization != principal.admission.Organization {
+		return LocalPrincipal{}, false
+	}
+	return LocalPrincipal{identity: principal.identity, admission: admission, valid: true}, true
 }
 
 type CredentialVerifier interface {
@@ -192,7 +232,7 @@ type CredentialVerifier interface {
 }
 
 type AdmissionResolver interface {
-	ResolveIdentity(context.Context, VerifiedIdentity, OrganizationTarget) (LocalPrincipal, bool, error)
+	ResolveIdentity(context.Context, VerifiedIdentity, OrganizationTarget) (LocalAdmission, bool, error)
 }
 
 type Authenticator interface {
@@ -223,13 +263,26 @@ func (service *AuthenticationService) Authenticate(
 		}
 		return LocalPrincipal{}, ErrUnauthenticated
 	}
-	principal, found, err := service.resolver.ResolveIdentity(ctx, identity, target)
+	// Credential adapters own issuer-specific clock-skew validation. This
+	// structural check rejects expired or internally inconsistent identities
+	// before they can reach the admission store.
+	if !identity.ValidAt(time.Now()) {
+		return LocalPrincipal{}, ErrUnauthenticated
+	}
+	admission, found, err := service.resolver.ResolveIdentity(ctx, identity, target)
 	if err != nil {
 		return LocalPrincipal{}, ErrIdentityUnavailable
 	}
 	if !found {
 		return LocalPrincipal{}, ErrNotAdmitted
 	}
+	if !admission.Valid() {
+		return LocalPrincipal{}, ErrIdentityUnavailable
+	}
+	if exact, ok := target.Organization(); ok && admission.Organization != exact {
+		return LocalPrincipal{}, ErrIdentityUnavailable
+	}
+	principal := LocalPrincipal{identity: identity, admission: admission, valid: true}
 	return principal, nil
 }
 
@@ -361,7 +414,7 @@ type InvitationGrant struct {
 }
 
 func (grant InvitationGrant) Validate() error {
-	if grant.Namespace.String() == "" || grant.Invitation.String() == "" || grant.Organization.String() == "" || grant.Role.String() == "" {
+	if grant.Namespace.String() == "" || grant.Invitation.String() == "" || !grant.Organization.Valid() || grant.Role.String() == "" {
 		return ErrLifecycleEvent
 	}
 	return nil

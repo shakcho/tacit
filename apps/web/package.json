@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@casl/ability": "catalog:",
     "@tanstack/react-query": "catalog:",
     "@workos-inc/authkit-nextjs": "catalog:",
     "@workos-inc/node": "catalog:",

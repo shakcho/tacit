@@ -1,0 +1,166 @@
+{
+  "snapshots": [
+    {
+      "name": "admin-context",
+      "policyRevision": "tacit-authorization-v1",
+      "decisions": [
+        {
+          "action": "read",
+          "allowed": true,
+          "resource": "organization",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/organization"
+        },
+        {
+          "action": "manage_members",
+          "allowed": true,
+          "resource": "administration",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/administration"
+        },
+        {
+          "action": "read",
+          "allowed": false,
+          "resource": "administration",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/administration"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "resource": "project",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/project"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "resource": "meeting",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/meeting"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "resource": "recording",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/recording"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "resource": "highlight",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/highlight"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "resource": "playlist",
+          "scope": "context",
+          "subject": "context/org_0000000000000000000000000000003c/playlist"
+        }
+      ],
+      "assertions": [
+        {
+          "action": "manage_members",
+          "allowed": true,
+          "subject": "context/org_0000000000000000000000000000003c/administration"
+        },
+        {
+          "action": "create",
+          "allowed": true,
+          "subject": "context/org_0000000000000000000000000000003c/meeting"
+        }
+      ]
+    },
+    {
+      "name": "viewer-published-meeting",
+      "policyRevision": "tacit-authorization-v1",
+      "decisions": [
+        {
+          "action": "read",
+          "allowed": true,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "update",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "delete",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "search",
+          "allowed": true,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "subscribe",
+          "allowed": true,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "manage_collaborators",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "publish",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "manage_shares",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "issue_media_grant",
+          "allowed": true,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "enqueue_work",
+          "allowed": false,
+          "resource": "meeting",
+          "scope": "resource",
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        }
+      ],
+      "assertions": [
+        {
+          "action": "read",
+          "allowed": true,
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        },
+        {
+          "action": "update",
+          "allowed": false,
+          "subject": "resource/org_0000000000000000000000000000003c/meeting/mtg_fixture"
+        }
+      ]
+    }
+  ]
+}

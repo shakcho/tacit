@@ -255,10 +255,62 @@ components:
     MembershipRole:
       type: string
       enum: [admin, editor, viewer]
+    AuthorizationAction:
+      type: string
+      enum:
+        - read
+        - create
+        - update
+        - delete
+        - manage_members
+        - manage_collaborators
+        - publish
+        - manage_shares
+        - issue_media_grant
+        - subscribe
+        - search
+        - enqueue_work
+        - submit_worker_result
+    AuthorizationResource:
+      type: string
+      enum: [organization, project, meeting, recording, transcript, highlight, playlist, share, administration]
+    AuthorizationScope:
+      type: string
+      enum: [context, resource]
+    AuthorizationDecision:
+      type: object
+      additionalProperties: false
+      required: [action, resource, scope, subject, allowed]
+      properties:
+        action:
+          $ref: "#/components/schemas/AuthorizationAction"
+        resource:
+          $ref: "#/components/schemas/AuthorizationResource"
+        scope:
+          $ref: "#/components/schemas/AuthorizationScope"
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 512
+          pattern: "^(context|resource)/"
+        allowed:
+          type: boolean
+    AuthorizationSnapshot:
+      type: object
+      additionalProperties: false
+      required: [policyRevision, decisions]
+      properties:
+        policyRevision:
+          type: string
+          minLength: 1
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorizationDecision"
     AuthenticationSession:
       type: object
       additionalProperties: false
-      required: [userId, organizationId, roles]
+      required: [userId, organizationId, roles, authorization]
       properties:
         userId:
           $ref: "#/components/schemas/UserID"
@@ -270,6 +322,8 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/MembershipRole"
+        authorization:
+          $ref: "#/components/schemas/AuthorizationSnapshot"
     ShellSampleID:
       type: string
       pattern: "^smp_[0-9a-f]{32}$"
