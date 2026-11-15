@@ -95,7 +95,7 @@ go run ./cmd/tacit-db demo-bootstrap \
 
 Now run `pnpm dev` and open `http://127.0.0.1:3000/meetings`. The command is idempotent for the same IDs. It fails on conflicting mappings.
 
-See [managed identity](docs/architecture/managed-identity.md) for the runtime contract, webhook behavior, and release gates.
+See [managed identity](docs/architecture/managed-identity.md) for the runtime contract, webhook behavior, and release gates. Use the [WorkOS local setup runbook](docs/runbooks/workos-local-setup.md) when configuring credentials and dashboard URLs.
 
 Override the default listeners when needed:
 

@@ -2,6 +2,8 @@
 
 Tacit uses WorkOS AuthKit for the browser session. PostgreSQL remains authoritative for local users, organizations, memberships, and roles.
 
+For dashboard configuration, environment-variable discovery, webhook setup, and demo admission, follow the [WorkOS local setup runbook](../runbooks/workos-local-setup.md).
+
 ## Request contract
 
 The browser sends only the AuthKit session cookie to Next.js. The catch-all `/api` route reads that session on the server, rejects a browser-supplied `Authorization` header, and forwards an allowlisted request to Go with one WorkOS access token. It does not forward cookies or `x-workos-*` headers.
