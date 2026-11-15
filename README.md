@@ -46,12 +46,14 @@ pnpm db:up
 Create a separate database whose name starts with `tacit_test_`, then run the PostgreSQL integration suite:
 
 ```bash
-PGPASSWORD=tacit_dev createdb --host 127.0.0.1 --port 54329 --username tacit_dev tacit_test_source
-export TACIT_TEST_DATABASE_URL='postgres://tacit_dev:tacit_dev@127.0.0.1:54329/tacit_test_source?sslmode=disable'
+PGPASSWORD=tacit_dev createdb --host 127.0.0.1 --port 54330 --username tacit_dev tacit_test_source
+export TACIT_TEST_DATABASE_URL='postgres://tacit_dev:tacit_dev@127.0.0.1:54330/tacit_test_source?sslmode=disable'
 pnpm test:postgres
 ```
 
 The sample store remains memory-backed. When WorkOS variables are present, the API protects the sample routes with the same local identity and organization checks used by product routes.
+
+Compose binds PostgreSQL to port `54330` by default. Set `TACIT_POSTGRES_PORT` before `pnpm db:up` to use another host port, and update the database URLs to match.
 
 ## Local development
 
