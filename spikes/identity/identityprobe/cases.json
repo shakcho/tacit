@@ -1,0 +1,87 @@
+[
+  {
+    "id": "session.sign-in",
+    "description": "A valid provider session yields the expected subject, session, and active organization.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "session.sign-out",
+    "description": "Local sign-out denial rejects an otherwise valid captured access token.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "session.remote-revoke",
+    "description": "A verified revocation denial rejects an otherwise valid captured access token.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "session.organization-switch",
+    "description": "Switching organizations yields a token bound to the newly selected organization.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.forged",
+    "description": "A token signed by an untrusted key is rejected.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.wrong-issuer",
+    "description": "A token from another issuer is rejected.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.wrong-party",
+    "description": "A token for another WorkOS client or Clerk authorized party is rejected.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.expired",
+    "description": "An expired token is rejected after the configured clock tolerance.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.future-not-before",
+    "description": "A token whose not-before time is in the future is rejected.",
+    "evidence": ["fixture"]
+  },
+  {
+    "id": "token.future-issued-at",
+    "description": "A token whose issued-at time is in the future is rejected.",
+    "evidence": ["fixture"]
+  },
+  {
+    "id": "token.excessive-lifetime",
+    "description": "A token whose lifetime exceeds Tacit's admission policy is rejected.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "token.missing-subject",
+    "description": "A token without a subject is rejected.",
+    "evidence": ["fixture"]
+  },
+  {
+    "id": "token.missing-session",
+    "description": "A token without a session identifier is rejected.",
+    "evidence": ["fixture"]
+  },
+  {
+    "id": "token.missing-organization",
+    "description": "A token without an active organization is rejected.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "tenant.cross-organization",
+    "description": "A token bound to one external organization cannot satisfy another organization request.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "keys.rotation",
+    "description": "A configured rotated signing key verifies while an unknown key fails closed.",
+    "evidence": ["fixture", "sandbox"]
+  },
+  {
+    "id": "link.same-email",
+    "description": "Two authenticated subjects with the same email do not link without independent account-control proof.",
+    "evidence": ["sandbox", "documentation"]
+  }
+]
