@@ -3,6 +3,8 @@ packages:
   - packages/*
 catalog:
   '@tanstack/react-query': 5.107.1
+  '@workos-inc/authkit-nextjs': 4.6.3
+  '@workos-inc/node': 12.3.0
   orval: 8.48.0
 
 catalogMode: strict

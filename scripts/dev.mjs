@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 
+try {
+  process.loadEnvFile(".env");
+} catch (error) {
+  if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+}
+
 const webHost = process.env.TACIT_WEB_HOST ?? "127.0.0.1";
 const webPort = process.env.TACIT_WEB_PORT ?? "3000";
 const apiAddress = process.env.TACIT_API_ADDRESS ?? "127.0.0.1:8080";
@@ -16,7 +22,7 @@ function reachableAddress(address) {
   return address;
 }
 
-const webURL = `http://${reachableHost(webHost)}:${webPort}/meetings`;
+const webURL = `http://${reachableHost(webHost)}:${webPort}/healthz`;
 const apiHealthURL = process.env.TACIT_API_HEALTH_URL ?? `http://${reachableAddress(apiAddress)}/healthz`;
 
 const services = [
@@ -28,6 +34,11 @@ const services = [
   {
     args: ["--filter", "@tacit/web", "dev", "--hostname", webHost, "--port", webPort],
     command: "pnpm",
+    env: {
+      ...process.env,
+      TACIT_API_ORIGIN: process.env.TACIT_API_ORIGIN ?? `http://${reachableAddress(apiAddress)}`,
+      TACIT_WEB_ORIGIN: process.env.TACIT_WEB_ORIGIN ?? `http://${reachableHost(webHost)}:${webPort}`,
+    },
     name: "web",
   },
 ];
@@ -59,7 +70,7 @@ function shutdown(signal = "SIGTERM", requestedExitCode = exitCode) {
 function startService(service) {
   const child = spawn(service.command, service.args, {
     detached: process.platform !== "win32",
-    env: process.env,
+    env: service.env ?? process.env,
     stdio: "inherit",
   });
   children.set(service.name, child);

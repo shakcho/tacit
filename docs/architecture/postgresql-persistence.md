@@ -24,7 +24,7 @@ An idempotency record is identified by organization, operation scope, and client
 
 The API does not run migrations during startup. A deployment runs `tacit-db migrate` before it starts a binary that requires the new schema. The binary rejects a schema version outside its supported range.
 
-Version 1 supports an empty database and repeated version-1 execution. When version 2 is added, CI must add a populated version-1 fixture and prove the version-1 to version-2 rollout before version 2 becomes current.
+Version 2 adds managed-identity organization mappings, admission state, session denials, invitation grants, and the lifecycle event inbox. The integration suite creates a populated version-1 schema in an isolated PostgreSQL schema, applies migration 2, and checks that the existing user, organization, membership, role, and identity alias remain intact.
 
 ## Managed service
 
@@ -45,7 +45,7 @@ Supabase documents daily backups on paid plans and optional point-in-time recove
 
 ## Verification
 
-The PostgreSQL integration suite must run against a real server. It covers migrations, composite tenant foreign keys, concurrent final-admin changes, duplicate commands, and alternating tenant access through a reused pool.
+The PostgreSQL integration suite must run against a real server. It covers the populated version-1 upgrade, composite tenant foreign keys, concurrent final-admin changes, duplicate commands, identity admission, invitation acceptance, lifecycle replay, and alternating tenant access through a reused pool.
 
 The restore check dumps a quiescent disposable source, restores it into an empty disposable target, and compares deterministic data hashes and the migration ledger. A passing logical restore does not measure the managed point-in-time recovery objective.
 

@@ -4,12 +4,16 @@ import { fileURLToPath } from "node:url";
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = join(workspace, "src");
-const allowedPublicVariables = new Set(["NEXT_PUBLIC_API_BASE_PATH"]);
+const allowedPublicVariables = new Set(["NEXT_PUBLIC_API_BASE_PATH", "NEXT_PUBLIC_WORKOS_REDIRECT_URI"]);
 const privateVariableNames = [
   "DATABASE_URL",
   "TACIT_API_ORIGIN",
   "TACIT_AUTH_SECRET",
+  "TACIT_DATABASE_URL",
   "TACIT_PRIVATE_BUNDLE_CANARY",
+  "TACIT_WORKOS_WEBHOOK_SECRET",
+  "WORKOS_API_KEY",
+  "WORKOS_COOKIE_PASSWORD",
 ];
 const errors = [];
 

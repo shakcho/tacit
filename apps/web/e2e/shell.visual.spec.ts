@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("shell keeps equal content edges and no horizontal overflow", async ({ page }, testInfo) => {
+  test.skip(!process.env.WORKOS_CLIENT_ID, "WorkOS staging credentials are required for the authenticated browser flow");
   await page.goto("/meetings");
 
   const viewport = page.viewportSize();
@@ -27,6 +28,7 @@ test("shell keeps equal content edges and no horizontal overflow", async ({ page
 });
 
 test("mobile shell exposes four reachable product destinations", async ({ page }) => {
+  test.skip(!process.env.WORKOS_CLIENT_ID, "WorkOS staging credentials are required for the authenticated browser flow");
   test.skip(page.viewportSize()?.width !== 390, "mobile-only contract");
   await page.goto("/meetings");
 

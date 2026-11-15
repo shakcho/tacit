@@ -2,11 +2,41 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestPartialIdentityConfigurationFailsClosed(t *testing.T) {
+	t.Setenv("TACIT_DATABASE_URL", "postgres://configured")
+	t.Setenv("TACIT_IDENTITY_NAMESPACE", "")
+	t.Setenv("TACIT_WORKOS_ISSUER", "")
+	t.Setenv("TACIT_WORKOS_CLIENT_ID", "")
+	t.Setenv("TACIT_WORKOS_JWKS_URL", "")
+	t.Setenv("TACIT_WORKOS_WEBHOOK_SECRET", "")
+
+	handler, closeDependencies, err := newProductionHandler(context.Background())
+	if err == nil || handler != nil || closeDependencies != nil {
+		t.Fatalf("newProductionHandler() = (%v, %v, %v), want configuration error", handler, closeDependencies, err)
+	}
+}
+
+func TestProductionRequiresIdentityConfiguration(t *testing.T) {
+	t.Setenv("TACIT_ENV", "production")
+	t.Setenv("TACIT_DATABASE_URL", "")
+	t.Setenv("TACIT_IDENTITY_NAMESPACE", "")
+	t.Setenv("TACIT_WORKOS_ISSUER", "")
+	t.Setenv("TACIT_WORKOS_CLIENT_ID", "")
+	t.Setenv("TACIT_WORKOS_JWKS_URL", "")
+	t.Setenv("TACIT_WORKOS_WEBHOOK_SECRET", "")
+
+	handler, closeDependencies, err := newProductionHandler(context.Background())
+	if err == nil || handler != nil || closeDependencies != nil {
+		t.Fatalf("newProductionHandler() = (%v, %v, %v), want production identity error", handler, closeDependencies, err)
+	}
+}
 
 func TestDefaultListenAddress(t *testing.T) {
 	t.Setenv("TACIT_API_ADDRESS", "")

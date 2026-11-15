@@ -8,10 +8,20 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
 type AppShellProps = {
+  account: Readonly<{
+    email: string;
+    name: string;
+    organization: string;
+  }>;
   children: ReactNode;
 };
 
-export function AppShell({ children }: AppShellProps) {
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/u).filter((part) => part.length > 0);
+  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "U";
+}
+
+export function AppShell({ account, children }: AppShellProps) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <a
@@ -70,10 +80,10 @@ export function AppShell({ children }: AppShellProps) {
             Help
           </Link>
           <Link className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring" href="/profile">
-            <span aria-hidden="true" className="inline-flex size-8 items-center justify-center rounded-lg bg-foreground text-xs font-semibold text-background">AD</span>
+            <span aria-hidden="true" className="inline-flex size-8 items-center justify-center rounded-lg bg-foreground text-xs font-semibold text-background">{initials(account.name)}</span>
             <span>
-              <span className="block text-sm text-sidebar-foreground">Alex Demo</span>
-              <span className="block text-xs font-normal text-sidebar-muted">Demo workspace</span>
+              <span className="block max-w-36 truncate text-sm text-sidebar-foreground">{account.name}</span>
+              <span className="block max-w-36 truncate text-xs font-normal text-sidebar-muted">{account.organization}</span>
             </span>
           </Link>
         </div>
@@ -98,7 +108,7 @@ export function AppShell({ children }: AppShellProps) {
               className="inline-flex size-10 items-center justify-center rounded-full border border-border bg-card text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               href="/profile"
             >
-              A
+              {initials(account.name).slice(0, 1)}
             </Link>
           </div>
         </header>
