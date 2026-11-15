@@ -10,14 +10,14 @@ Use this runbook when configuring managed authentication for local Tacit develop
 - [ ] Configure callback, login, and sign-out URIs in WorkOS.
 - [ ] Choose a stable Tacit identity namespace.
 - [ ] Create a WorkOS webhook endpoint and copy its secret.
-- [ ] Put the shared configuration in the repository-root `.env`.
+- [ ] Put the shared configuration in the repository-root `.env.local` or `.env`.
 - [ ] Start PostgreSQL, run migrations, and start the development stack.
 - [ ] Bootstrap one exact WorkOS user, organization, and membership mapping.
 - [ ] Verify sign-in, local admission, sign-out, and a test webhook.
 
 ## Environment-file ownership
 
-`apps/web/.env.local` is read by Next.js only. The Go API does not read that file. `pnpm dev` loads the repository-root `.env` and passes it to both processes, so keep the complete local configuration there.
+`apps/web/.env.local` is read by Next.js only. The Go API does not read that file. `pnpm dev` loads the repository-root `.env.local` and `.env` files and passes the resulting environment to both processes. Existing shell variables take precedence, followed by `.env.local`, and then `.env`. Keep the complete local configuration in one of the repository-root files.
 
 Tacit does not read `TACIT_WORKOS_API_KEY`. The WorkOS API key, when used, must be named `WORKOS_API_KEY`. It is optional for the current AuthKit sign-in flow because the SDK supports PKCE public-client mode.
 
@@ -118,9 +118,9 @@ TACIT_WORKOS_WEBHOOK_SECRET=whsec_replace_me
 
 Do not substitute an API key for the webhook secret. They have different purposes and are validated differently.
 
-## Root `.env` template
+## Root environment template
 
-Create `/path/to/tacit/.env` from this template and replace every placeholder:
+Create `/path/to/tacit/.env.local` or `/path/to/tacit/.env` from this template and replace every placeholder:
 
 ```dotenv
 TACIT_ENV=development
@@ -152,9 +152,10 @@ If the application runs in public-client mode, remove the entire `WORKOS_API_KEY
 
 ```bash
 pnpm db:up
-pnpm db:migrate
 pnpm dev
 ```
+
+`pnpm dev` applies pending database migrations before it starts the API and the web application. A migration failure stops the command before either service starts.
 
 Open `http://127.0.0.1:3000/meetings`. Successful WorkOS authentication is not enough by itself: Tacit also requires a current local organization membership.
 

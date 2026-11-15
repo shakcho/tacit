@@ -35,13 +35,13 @@ Run the local CI equivalent at any time:
 
 ## Local PostgreSQL
 
-Start the development database and apply the embedded forward migrations:
+Start the development database:
 
 ```bash
 pnpm db:up
-export TACIT_DATABASE_DIRECT_URL='postgres://tacit_dev:tacit_dev@127.0.0.1:54329/tacit_dev?sslmode=disable'
-pnpm db:migrate
 ```
+
+`pnpm dev` applies the embedded forward migrations when `TACIT_DATABASE_DIRECT_URL` is configured. Use `pnpm db:migrate` when you need to apply migrations without starting the application.
 
 Create a separate database whose name starts with `tacit_test_`, then run the PostgreSQL integration suite:
 
@@ -61,22 +61,21 @@ For public pages and process health checks, start both application processes fro
 pnpm dev
 ```
 
-This starts Next.js at `http://127.0.0.1:3000` and the Go API at `http://127.0.0.1:8080`. The readiness check uses the public web and API health routes. Press `Ctrl+C` once to stop both processes.
+This command loads the repository-root `.env.local` and `.env` files. Existing shell variables take precedence, followed by `.env.local`, and then `.env`. When `TACIT_DATABASE_DIRECT_URL` is configured, the command applies database migrations before it starts the application. Next.js listens at `http://127.0.0.1:3000`, and the Go API listens at `http://127.0.0.1:8080`. The readiness check uses the public web and API health routes. Press `Ctrl+C` once to stop both processes.
 
 Product pages fail closed until you configure WorkOS. The browser keeps its AuthKit session in an HttpOnly cookie. The Next.js `/api` route obtains the short-lived access token on the server and sends it to Go. Go verifies the token and resolves current PostgreSQL membership before it returns local identity data.
 
-To run an authenticated demo, copy `.env.example` to `.env` and replace every WorkOS placeholder. Configure these WorkOS application URLs:
+To run an authenticated demo, copy `.env.example` to `.env.local` or `.env` and replace every WorkOS placeholder. Configure these WorkOS application URLs:
 
 - callback URI: `http://127.0.0.1:3000/auth/callback`
 - initiate login URI: `http://127.0.0.1:3000/auth/sign-in`
 - sign-out URI: `http://127.0.0.1:3000`
 - invitation URL: use the hosted AuthKit default
 
-Start PostgreSQL and apply migration 2 before you start the application:
+Start PostgreSQL before you start the application:
 
 ```bash
 pnpm db:up
-pnpm db:migrate
 ```
 
 Create the local demo mapping with exact IDs from the WorkOS staging dashboard. The command accepts no email address and refuses a non-loopback database URL.
