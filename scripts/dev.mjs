@@ -173,7 +173,8 @@ const existingServices = await Promise.all([
   endpointIsReady(webURL),
 ]);
 if (existingServices.every(Boolean)) {
-  console.log("[dev] Tacit is already running.");
+  console.log("[dev] Tacit is already running; this command did not reload .env.local.");
+  console.log("[dev] Stop the existing pnpm dev process with Ctrl+C before restarting after configuration changes.");
   process.exit(0);
 }
 if (existingServices.some(Boolean)) {

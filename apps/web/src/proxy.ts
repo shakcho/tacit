@@ -2,6 +2,8 @@ import { authkit, handleAuthkitProxy } from "@workos-inc/authkit-nextjs";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import { hasWorkOSConfiguration } from "@/lib/workos-environment";
+
 const protectedPrefixes = [
   "/design-system",
   "/help",
@@ -25,15 +27,6 @@ function requiresIdentity(pathname: string): boolean {
     "/auth/sign-up",
     "/auth/switch-organization",
   ].includes(pathname);
-}
-
-function hasWorkOSConfiguration(): boolean {
-  return [
-    process.env.WORKOS_CLIENT_ID,
-    process.env.WORKOS_COOKIE_PASSWORD,
-    process.env.WORKOS_ISSUER,
-    process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI,
-  ].every((value) => value !== undefined && value.length > 0);
 }
 
 export default async function proxy(request: NextRequest) {

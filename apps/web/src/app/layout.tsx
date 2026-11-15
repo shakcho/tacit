@@ -3,6 +3,8 @@ import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 
+import { hasWorkOSConfiguration } from "@/lib/workos-environment";
+
 import "./globals.css";
 
 const geistSans = localFont({
@@ -39,15 +41,6 @@ export const viewport: Viewport = {
 type RootLayoutProps = {
   children: ReactNode;
 };
-
-function hasWorkOSConfiguration(): boolean {
-  return [
-    process.env.WORKOS_CLIENT_ID,
-    process.env.WORKOS_COOKIE_PASSWORD,
-    process.env.WORKOS_ISSUER,
-    process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI,
-  ].every((value) => value !== undefined && value.length > 0);
-}
 
 export default function RootLayout({ children }: RootLayoutProps) {
   const authConfigured = hasWorkOSConfiguration();
