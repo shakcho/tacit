@@ -4,11 +4,16 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/shakcho/tacit/internal/access"
 	"github.com/shakcho/tacit/internal/runtime/idempotency"
@@ -32,7 +37,10 @@ func integrationStore(t *testing.T) *Store {
 	}
 	t.Cleanup(store.Close)
 	if _, err := store.pool.Exec(t.Context(), `
-        TRUNCATE tacit_idempotency_records, tacit_access_audit, tacit_membership_external_ids,
+        TRUNCATE tacit_identity_event_inbox, tacit_identity_invitation_grants,
+            tacit_identity_organization_states, tacit_identity_subject_states,
+            tacit_identity_session_denials, tacit_identity_membership_admissions,
+            tacit_identity_organizations, tacit_idempotency_records, tacit_access_audit, tacit_membership_external_ids,
             tacit_identity_subjects, tacit_membership_roles, tacit_organization_memberships,
             tacit_organizations, tacit_users CASCADE`); err != nil {
 		t.Fatal(err)
@@ -111,6 +119,105 @@ func TestMigrationsAreRepeatable(t *testing.T) {
 	}
 	if version != CurrentSchemaVersion {
 		t.Fatalf("schema version = %d", version)
+	}
+}
+
+func TestPopulatedVersionOneUpgradesToVersionTwo(t *testing.T) {
+	baseURL := os.Getenv("TACIT_TEST_DATABASE_URL")
+	if baseURL == "" {
+		t.Fatal("TACIT_TEST_DATABASE_URL is required for integration tests")
+	}
+	admin, err := pgx.Connect(t.Context(), baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := "tacit_upgrade_v1_fixture"
+	identifier := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(t.Context(), "DROP SCHEMA IF EXISTS "+identifier+" CASCADE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(t.Context(), "CREATE SCHEMA "+identifier); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+identifier+" CASCADE")
+		_ = admin.Close(context.Background())
+	})
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsedURL.Query()
+	query.Set("search_path", schema)
+	parsedURL.RawQuery = query.Encode()
+	upgradeURL := parsedURL.String()
+	connection, err := pgx.Connect(t.Context(), upgradeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(t.Context(), `
+        CREATE TABLE tacit_schema_migrations (
+            version bigint PRIMARY KEY CHECK (version > 0),
+            name text NOT NULL,
+            checksum text NOT NULL CHECK (length(checksum) = 64),
+            applied_at timestamptz NOT NULL DEFAULT now()
+        )`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(t.Context(), migrations[0].SQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(t.Context(),
+		`INSERT INTO tacit_schema_migrations (version, name, checksum) VALUES (1, $1, $2)`,
+		migrations[0].Name, migrations[0].Checksum,
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixtureStatements := []string{
+		`INSERT INTO tacit_users (id) VALUES ('00000000-0000-4000-8000-000000000001')`,
+		`INSERT INTO tacit_organizations (id, name) VALUES ('00000000-0000-4000-8000-000000000001', 'Version one')`,
+		`INSERT INTO tacit_organization_memberships (organization_id, user_id) VALUES ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001')`,
+		`INSERT INTO tacit_membership_roles (organization_id, user_id, role) VALUES ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'admin')`,
+		`INSERT INTO tacit_identity_subjects (provider, subject, user_id) VALUES ('legacy-fixture', 'subject-1', '00000000-0000-4000-8000-000000000001')`,
+	}
+	for _, statement := range fixtureStatements {
+		if _, err := connection.Exec(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := connection.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(t.Context(), upgradeURL); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := pgx.Connect(t.Context(), upgradeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = verified.Close(context.Background()) }()
+	var version, users, roles int
+	var identityTableExists bool
+	if err := verified.QueryRow(t.Context(), `SELECT MAX(version) FROM tacit_schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := verified.QueryRow(t.Context(), `SELECT count(*) FROM tacit_users`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if err := verified.QueryRow(t.Context(), `SELECT count(*) FROM tacit_membership_roles WHERE role = 'admin'`).Scan(&roles); err != nil {
+		t.Fatal(err)
+	}
+	if err := verified.QueryRow(t.Context(), `SELECT to_regclass('tacit_identity_organizations') IS NOT NULL`).Scan(&identityTableExists); err != nil {
+		t.Fatal(err)
+	}
+	if version != int(CurrentSchemaVersion) || users != 1 || roles != 1 || !identityTableExists {
+		t.Fatalf("upgrade version=%d users=%d roles=%d identity_table=%v", version, users, roles, identityTableExists)
 	}
 }
 
@@ -297,5 +404,240 @@ func TestTenantQueriesIgnorePooledSessionState(t *testing.T) {
 		Organization: firstOrganization, User: secondOwner,
 	}); err != nil || found {
 		t.Fatalf("cross-tenant membership = %v, %v", found, err)
+	}
+}
+
+func bootstrapIdentity(t *testing.T, store *Store, suffix int) (access.BootstrapIdentity, access.VerifiedIdentity) {
+	t.Helper()
+	namespace, _ := access.ParseIdentityNamespace("workos-test")
+	subject, _ := access.ParseExternalSubject(fmt.Sprintf("user_%d", suffix))
+	externalOrganization, _ := access.ParseExternalOrganizationID(fmt.Sprintf("workos_org_%d", suffix))
+	externalMembership, _ := access.ParseExternalMembershipID(fmt.Sprintf("membership_%d", suffix))
+	session, _ := access.ParseExternalSessionID(fmt.Sprintf("session_%d", suffix))
+	name, _ := access.ParseName("Identity integration organization")
+	bootstrap := access.BootstrapIdentity{
+		Namespace: namespace, Subject: subject, ExternalOrganization: externalOrganization,
+		ExternalMembership: externalMembership, User: userID(t, 100+suffix),
+		Organization: organizationID(t, 100+suffix), OrganizationName: name,
+	}
+	identity := access.VerifiedIdentity{
+		Namespace: namespace, Subject: subject, Organization: externalOrganization, Session: session,
+		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}
+	return bootstrap, identity
+}
+
+func TestIdentityAdmissionUsesMappingsMembershipAndSessionDenial(t *testing.T) {
+	store := integrationStore(t)
+	bootstrap, identity := bootstrapIdentity(t, store, 1)
+	if err := store.BootstrapIdentity(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BootstrapIdentity(t.Context(), bootstrap); err != nil {
+		t.Fatalf("idempotent bootstrap: %v", err)
+	}
+	principal, found, err := store.ResolveIdentity(t.Context(), identity, access.TokenOrganization())
+	if err != nil || !found || principal.User != bootstrap.User || principal.Organization != bootstrap.Organization || !principal.Roles.Has(access.RoleAdmin) {
+		t.Fatalf("ResolveIdentity = %#v, %v, %v", principal, found, err)
+	}
+	wrongOrganization := organizationID(t, 999)
+	if _, found, err := store.ResolveIdentity(t.Context(), identity, access.ExactOrganization(wrongOrganization)); err != nil || found {
+		t.Fatalf("wrong organization admission = %v, %v", found, err)
+	}
+	if err := store.DenySession(t.Context(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.ResolveIdentity(t.Context(), identity, access.TokenOrganization()); err != nil || found {
+		t.Fatalf("denied session admission = %v, %v", found, err)
+	}
+}
+
+func TestIdentitySubjectMappingCannotBeMovedOrDeleted(t *testing.T) {
+	store := integrationStore(t)
+	bootstrap, _ := bootstrapIdentity(t, store, 4)
+	if err := store.BootstrapIdentity(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	otherUser := userID(t, 904)
+	if err := store.CreateUser(t.Context(), access.CreateUserCommand{ID: otherUser}); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`UPDATE tacit_identity_subjects SET user_id = $3 WHERE provider = $1 AND subject = $2`,
+		`DELETE FROM tacit_identity_subjects WHERE provider = $1 AND subject = $2 AND $3::uuid IS NOT NULL`,
+	} {
+		if _, err := store.pool.Exec(t.Context(), statement,
+			bootstrap.Namespace.String(), bootstrap.Subject.String(), databaseUUID(otherUser.Bytes()),
+		); err == nil {
+			t.Fatalf("identity mutation succeeded: %s", statement)
+		}
+	}
+	if _, found, err := store.ResolveIdentity(t.Context(), access.VerifiedIdentity{
+		Namespace: bootstrap.Namespace, Subject: bootstrap.Subject,
+		Organization: bootstrap.ExternalOrganization, Session: mustExternalSession(t, "session_immutable"),
+		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}, access.TokenOrganization()); err != nil || !found {
+		t.Fatalf("immutable identity admission = %v, %v", found, err)
+	}
+}
+
+func mustExternalSession(t *testing.T, value string) access.ExternalSessionID {
+	t.Helper()
+	session, err := access.ParseExternalSessionID(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
+}
+
+func TestLifecycleReplayAndDenialWinOverNewerActivation(t *testing.T) {
+	store := integrationStore(t)
+	bootstrap, identity := bootstrapIdentity(t, store, 2)
+	if err := store.BootstrapIdentity(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	deniedEventID, _ := access.ParseExternalEventID("event_denied")
+	denied := access.LifecycleEvent{
+		Namespace: bootstrap.Namespace, ID: deniedEventID, Kind: access.LifecycleMembershipDenied,
+		PayloadHash: [32]byte{1}, OccurredAt: now, ResourceUpdated: now,
+		Subject: bootstrap.Subject, Organization: bootstrap.ExternalOrganization, Membership: bootstrap.ExternalMembership,
+	}
+	if outcome, err := store.ApplyLifecycle(t.Context(), denied); err != nil || outcome != access.LifecycleApplied {
+		t.Fatalf("deny lifecycle = %v, %v", outcome, err)
+	}
+	if outcome, err := store.ApplyLifecycle(t.Context(), denied); err != nil || outcome != access.LifecycleReplayed {
+		t.Fatalf("replay lifecycle = %v, %v", outcome, err)
+	}
+	conflict := denied
+	conflict.PayloadHash = [32]byte{2}
+	if _, err := store.ApplyLifecycle(t.Context(), conflict); !errors.Is(err, access.ErrLifecycleConflict) {
+		t.Fatalf("conflicting replay error = %v", err)
+	}
+	activatedEventID, _ := access.ParseExternalEventID("event_active_newer")
+	activated := denied
+	activated.ID = activatedEventID
+	activated.Kind = access.LifecycleMembershipActivated
+	activated.PayloadHash = [32]byte{3}
+	activated.OccurredAt = now.Add(time.Minute)
+	activated.ResourceUpdated = now.Add(time.Minute)
+	if outcome, err := store.ApplyLifecycle(t.Context(), activated); err != nil || outcome != access.LifecycleApplied {
+		t.Fatalf("later active lifecycle = %v, %v", outcome, err)
+	}
+	if _, found, err := store.ResolveIdentity(t.Context(), identity, access.TokenOrganization()); err != nil || found {
+		t.Fatalf("denial cleared by active event = %v, %v", found, err)
+	}
+	var adminRoles int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FROM tacit_membership_roles
+        WHERE organization_id = $1 AND user_id = $2 AND role = 'admin'`,
+		databaseUUID(bootstrap.Organization.Bytes()), databaseUUID(bootstrap.User.Bytes()),
+	).Scan(&adminRoles); err != nil {
+		t.Fatal(err)
+	}
+	if adminRoles != 1 {
+		t.Fatalf("local admin roles = %d", adminRoles)
+	}
+}
+
+func TestInvitationAcceptanceUsesRegisteredRoleWithoutEmailLinkingOrEscalation(t *testing.T) {
+	store := integrationStore(t)
+	bootstrap, _ := bootstrapIdentity(t, store, 3)
+	if err := store.BootstrapIdentity(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	invitation, _ := access.ParseExternalInvitationID("invitation_viewer")
+	grant := access.InvitationGrant{
+		Namespace: bootstrap.Namespace, Invitation: invitation,
+		Organization: bootstrap.Organization, Role: access.RoleViewer,
+	}
+	if err := store.RegisterInvitationGrant(t.Context(), grant); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RegisterInvitationGrant(t.Context(), grant); err != nil {
+		t.Fatalf("idempotent invitation registration: %v", err)
+	}
+	conflictingGrant := grant
+	conflictingGrant.Role = access.RoleAdmin
+	if err := store.RegisterInvitationGrant(t.Context(), conflictingGrant); !errors.Is(err, access.ErrInvitationConflict) {
+		t.Fatalf("conflicting invitation registration error = %v", err)
+	}
+	invitedSubject, _ := access.ParseExternalSubject("user_invited")
+	acceptedEventID, _ := access.ParseExternalEventID("event_invitation_accepted")
+	now := time.Now().UTC()
+	accepted := access.LifecycleEvent{
+		Namespace: bootstrap.Namespace, ID: acceptedEventID, Kind: access.LifecycleInvitationAccepted,
+		PayloadHash: [32]byte{4}, OccurredAt: now, Subject: invitedSubject,
+		Organization: bootstrap.ExternalOrganization, Invitation: invitation,
+	}
+	if outcome, err := store.ApplyLifecycle(t.Context(), accepted); err != nil || outcome != access.LifecycleApplied {
+		t.Fatalf("accept invitation = %v, %v", outcome, err)
+	}
+	var invitedUser pgtype.UUID
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT user_id FROM tacit_identity_subjects
+        WHERE provider = $1 AND subject = $2`,
+		bootstrap.Namespace.String(), invitedSubject.String(),
+	).Scan(&invitedUser); err != nil {
+		t.Fatal(err)
+	}
+	var viewerRoles, adminRoles int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FILTER (WHERE role = 'viewer'), count(*) FILTER (WHERE role = 'admin')
+        FROM tacit_membership_roles
+        WHERE organization_id = $1 AND user_id = $2`,
+		databaseUUID(bootstrap.Organization.Bytes()), invitedUser,
+	).Scan(&viewerRoles, &adminRoles); err != nil {
+		t.Fatal(err)
+	}
+	if viewerRoles != 1 || adminRoles != 0 {
+		t.Fatalf("invited roles viewer=%d admin=%d", viewerRoles, adminRoles)
+	}
+	invitedSession, _ := access.ParseExternalSessionID("session_invited")
+	invitedIdentity := access.VerifiedIdentity{
+		Namespace: bootstrap.Namespace, Subject: invitedSubject, Organization: bootstrap.ExternalOrganization,
+		Session: invitedSession, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute),
+	}
+	if _, found, err := store.ResolveIdentity(t.Context(), invitedIdentity, access.TokenOrganization()); err != nil || found {
+		t.Fatalf("invited identity admitted before provider membership = %v, %v", found, err)
+	}
+	externalMembership, _ := access.ParseExternalMembershipID("membership_invited")
+	membershipEventID, _ := access.ParseExternalEventID("event_invited_membership")
+	activeMembership := access.LifecycleEvent{
+		Namespace: bootstrap.Namespace, ID: membershipEventID, Kind: access.LifecycleMembershipActivated,
+		PayloadHash: [32]byte{5}, OccurredAt: now.Add(time.Second), ResourceUpdated: now.Add(time.Second),
+		Subject: invitedSubject, Organization: bootstrap.ExternalOrganization, Membership: externalMembership,
+	}
+	if _, err := store.ApplyLifecycle(t.Context(), activeMembership); err != nil {
+		t.Fatal(err)
+	}
+	if principal, found, err := store.ResolveIdentity(t.Context(), invitedIdentity, access.TokenOrganization()); err != nil || !found || !principal.Roles.Has(access.RoleViewer) {
+		t.Fatalf("invited identity admission = %#v, %v, %v", principal, found, err)
+	}
+	adminInvitation, _ := access.ParseExternalInvitationID("invitation_admin")
+	if err := store.RegisterInvitationGrant(t.Context(), access.InvitationGrant{
+		Namespace: bootstrap.Namespace, Invitation: adminInvitation,
+		Organization: bootstrap.Organization, Role: access.RoleAdmin,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adminEventID, _ := access.ParseExternalEventID("event_admin_invitation")
+	adminAccepted := accepted
+	adminAccepted.ID = adminEventID
+	adminAccepted.Invitation = adminInvitation
+	adminAccepted.PayloadHash = [32]byte{6}
+	adminAccepted.OccurredAt = now.Add(2 * time.Second)
+	if _, err := store.ApplyLifecycle(t.Context(), adminAccepted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FROM tacit_membership_roles
+        WHERE organization_id = $1 AND user_id = $2 AND role = 'admin'`,
+		databaseUUID(bootstrap.Organization.Bytes()), invitedUser,
+	).Scan(&adminRoles); err != nil {
+		t.Fatal(err)
+	}
+	if adminRoles != 0 {
+		t.Fatalf("existing membership was escalated to admin")
 	}
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const CurrentSchemaVersion int64 = 1
+const CurrentSchemaVersion int64 = 2
 
 var (
 	ErrMigrationChecksum = errors.New("migration checksum changed")

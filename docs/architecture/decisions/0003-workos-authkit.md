@@ -87,7 +87,7 @@ Before cutover, an authenticated legacy user can create a migration intent and c
 
 Offline JWT verification cannot discover an upstream revocation by itself. Tacit combines short token lifetime, verified WorkOS events, and local denial state.
 
-Local sign-out writes session denial before it reports success or clears the browser session. `session.revoked`, membership deactivation, and user suspension events add session denial or advance a subject issuance cutoff. Duplicate and reordered events cannot clear denial state. Denial records remain until all affected tokens have expired plus clock tolerance.
+Local sign-out writes session denial before it reports success or clears the browser session. `session.revoked`, membership deactivation, and user deletion events add session denial or advance a subject issuance cutoff. Duplicate and reordered events cannot clear denial state. TAC-007 keeps session denials indefinitely because a failed upstream logout can leave the provider session able to refresh. A later cleanup policy requires proof that WorkOS has ended the session and every issued token has expired.
 
 Every protected operation maps the verified external organization to the requested local organization and loads current local membership. A token for organization B cannot satisfy a request for organization A, even when the user belongs to both. Vendor roles do not grant Tacit permissions.
 

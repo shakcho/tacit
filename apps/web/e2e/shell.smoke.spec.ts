@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { scanAccessibility } from "./support/accessibility";
 
 test("authenticated shell renders and supports keyboard navigation", async ({ page }, testInfo) => {
+  test.skip(!process.env.WORKOS_CLIENT_ID, "WorkOS staging credentials are required for the authenticated browser flow");
   await page.goto("/meetings");
 
   await expect(page.getByRole("heading", { level: 1, name: "Meetings, ready to review." })).toBeVisible();

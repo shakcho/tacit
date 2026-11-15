@@ -9,23 +9,57 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/shakcho/tacit/internal/access"
 	"github.com/shakcho/tacit/internal/platform/process"
 	"github.com/shakcho/tacit/internal/runtime/shellsample"
 )
 
 const MaxInputBytes = 1 << 20
+const MaxWebhookBytes = 256 << 10
 
 //go:embed openapi.yaml
 var specification embed.FS
 
 type Handler struct {
-	samples shellsample.Samples
-	mux     *http.ServeMux
+	authenticator   access.Authenticator
+	lifecycle       access.IdentityLifecycle
+	samples         shellsample.Samples
+	sessionDenier   access.SessionDenier
+	webhookVerifier identityWebhookVerifier
+	mux             *http.ServeMux
 }
 
-func NewHandler(samples shellsample.Samples) *Handler {
+type identityWebhookVerifier interface {
+	Verify([]byte, string) (access.LifecycleEvent, error)
+}
+
+type IdentityDependencies struct {
+	Authenticator   access.Authenticator
+	Lifecycle       access.IdentityLifecycle
+	SessionDenier   access.SessionDenier
+	WebhookVerifier identityWebhookVerifier
+}
+
+type Option func(*Handler)
+
+func WithIdentity(dependencies IdentityDependencies) Option {
+	return func(handler *Handler) {
+		handler.authenticator = dependencies.Authenticator
+		handler.lifecycle = dependencies.Lifecycle
+		handler.sessionDenier = dependencies.SessionDenier
+		handler.webhookVerifier = dependencies.WebhookVerifier
+	}
+}
+
+func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 	handler := &Handler{samples: samples, mux: http.NewServeMux()}
+	for _, option := range options {
+		option(handler)
+	}
 	handler.mux.HandleFunc("GET /openapi.yaml", handler.serveSpecification)
+	handler.mux.HandleFunc("GET /v1/auth/session", handler.getAuthenticationSession)
+	handler.mux.HandleFunc("POST /internal/auth/session-denials", handler.denyAuthenticationSession)
+	handler.mux.HandleFunc("POST /webhooks/workos", handler.receiveWorkOSWebhook)
 	handler.mux.HandleFunc("POST /v1/shell-samples", handler.createShellSample)
 	handler.mux.HandleFunc("GET /v1/shell-samples/{sampleId}", handler.getShellSample)
 	handler.mux.HandleFunc("/", handler.notFound)
@@ -52,6 +86,12 @@ type createShellSampleResponse struct {
 }
 
 func (handler *Handler) createShellSample(response http.ResponseWriter, request *http.Request) {
+	if handler.authenticator != nil {
+		if problem := handler.requireTenantPrincipal(request); problem != nil {
+			writeProblem(response, request, *problem)
+			return
+		}
+	}
 	if problem := requireJSON(request); problem != nil {
 		writeProblem(response, request, *problem)
 		return
@@ -111,6 +151,12 @@ func (handler *Handler) createShellSample(response http.ResponseWriter, request 
 }
 
 func (handler *Handler) getShellSample(response http.ResponseWriter, request *http.Request) {
+	if handler.authenticator != nil {
+		if problem := handler.requireTenantPrincipal(request); problem != nil {
+			writeProblem(response, request, *problem)
+			return
+		}
+	}
 	id, err := shellsample.ParseID(request.PathValue("sampleId"))
 	if err != nil {
 		writeProblem(response, request, newProblem(http.StatusUnprocessableEntity, "INVALID_SAMPLE_ID"))
@@ -126,6 +172,144 @@ func (handler *Handler) getShellSample(response http.ResponseWriter, request *ht
 		return
 	}
 	writeJSON(response, http.StatusOK, sampleResponse(sample))
+}
+
+type authenticationSessionResponse struct {
+	OrganizationID string   `json:"organizationId"`
+	Roles          []string `json:"roles"`
+	UserID         string   `json:"userId"`
+}
+
+func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, request *http.Request) {
+	principal, problem := handler.authenticate(request, access.TokenOrganization())
+	if problem != nil {
+		writeProblem(response, request, *problem)
+		return
+	}
+	roleValues := principal.Roles.Values()
+	roles := make([]string, 0, len(roleValues))
+	for _, role := range roleValues {
+		roles = append(roles, role.String())
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, authenticationSessionResponse{
+		OrganizationID: principal.Organization.String(), Roles: roles, UserID: principal.User.String(),
+	})
+}
+
+func (handler *Handler) denyAuthenticationSession(response http.ResponseWriter, request *http.Request) {
+	if handler.sessionDenier == nil {
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	token, problem := bearerToken(request)
+	if problem != nil {
+		writeProblem(response, request, *problem)
+		return
+	}
+	if err := handler.sessionDenier.Deny(request.Context(), token); err != nil {
+		if errors.Is(err, access.ErrUnauthenticated) {
+			writeProblem(response, request, newProblem(http.StatusUnauthorized, "UNAUTHENTICATED"))
+			return
+		}
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (handler *Handler) receiveWorkOSWebhook(response http.ResponseWriter, request *http.Request) {
+	if handler.webhookVerifier == nil || handler.lifecycle == nil {
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	if problem := requireJSON(request); problem != nil {
+		writeProblem(response, request, *problem)
+		return
+	}
+	signatures := request.Header.Values("WorkOS-Signature")
+	if len(signatures) != 1 {
+		writeProblem(response, request, newProblem(http.StatusBadRequest, "INVALID_WEBHOOK"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, MaxWebhookBytes))
+	if err != nil {
+		var sizeError *http.MaxBytesError
+		if errors.As(err, &sizeError) {
+			writeProblem(response, request, newProblem(http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE"))
+			return
+		}
+		writeProblem(response, request, newProblem(http.StatusBadRequest, "INVALID_WEBHOOK"))
+		return
+	}
+	event, err := handler.webhookVerifier.Verify(body, signatures[0])
+	if err != nil {
+		writeProblem(response, request, newProblem(http.StatusBadRequest, "INVALID_WEBHOOK"))
+		return
+	}
+	_, err = handler.lifecycle.ApplyLifecycle(request.Context(), event)
+	if errors.Is(err, access.ErrLifecycleConflict) {
+		writeProblem(response, request, newProblem(http.StatusConflict, "WEBHOOK_CONFLICT"))
+		return
+	}
+	if err != nil {
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (handler *Handler) requireTenantPrincipal(request *http.Request) *problem {
+	organizations := request.Header.Values("X-Tacit-Organization")
+	if len(organizations) != 1 {
+		value := newProblem(http.StatusUnprocessableEntity, "INVALID_ORGANIZATION")
+		return &value
+	}
+	organization, err := access.ParseOrganizationID(organizations[0])
+	if err != nil {
+		value := newProblem(http.StatusUnprocessableEntity, "INVALID_ORGANIZATION")
+		return &value
+	}
+	_, value := handler.authenticate(request, access.ExactOrganization(organization))
+	return value
+}
+
+func (handler *Handler) authenticate(request *http.Request, target access.OrganizationTarget) (access.LocalPrincipal, *problem) {
+	if handler.authenticator == nil {
+		value := newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE")
+		return access.LocalPrincipal{}, &value
+	}
+	token, value := bearerToken(request)
+	if value != nil {
+		return access.LocalPrincipal{}, value
+	}
+	principal, err := handler.authenticator.Authenticate(request.Context(), token, target)
+	if err == nil {
+		return principal, nil
+	}
+	status, code := http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"
+	if errors.Is(err, access.ErrUnauthenticated) {
+		status, code = http.StatusUnauthorized, "UNAUTHENTICATED"
+	} else if errors.Is(err, access.ErrNotAdmitted) {
+		status, code = http.StatusForbidden, "NOT_ADMITTED"
+	}
+	problem := newProblem(status, code)
+	return access.LocalPrincipal{}, &problem
+}
+
+func bearerToken(request *http.Request) (access.BearerToken, *problem) {
+	values := request.Header.Values("Authorization")
+	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
+		value := newProblem(http.StatusUnauthorized, "UNAUTHENTICATED")
+		return access.BearerToken{}, &value
+	}
+	token, err := access.ParseBearerToken(strings.TrimPrefix(values[0], "Bearer "))
+	if err != nil {
+		value := newProblem(http.StatusUnauthorized, "UNAUTHENTICATED")
+		return access.BearerToken{}, &value
+	}
+	return token, nil
 }
 
 func (handler *Handler) serveSpecification(response http.ResponseWriter, request *http.Request) {
@@ -225,6 +409,18 @@ func problemText(code string) (string, string) {
 		return "Not found", "The requested resource does not exist."
 	case "UNAVAILABLE":
 		return "Service unavailable", "The operation cannot be completed by this process."
+	case "UNAUTHENTICATED":
+		return "Authentication required", "Provide one valid managed-identity bearer credential."
+	case "NOT_ADMITTED":
+		return "Workspace access denied", "The verified identity has no active local workspace membership."
+	case "IDENTITY_UNAVAILABLE":
+		return "Identity service unavailable", "Identity checks cannot be completed safely."
+	case "INVALID_ORGANIZATION":
+		return "Invalid organization", "Provide one canonical local organization ID."
+	case "INVALID_WEBHOOK":
+		return "Invalid webhook", "The WorkOS webhook could not be verified."
+	case "WEBHOOK_CONFLICT":
+		return "Webhook conflict", "The event ID was previously used with a different payload."
 	default:
 		return "Internal error", "The operation failed."
 	}
@@ -232,6 +428,10 @@ func problemText(code string) (string, string) {
 
 func writeProblem(response http.ResponseWriter, request *http.Request, value problem) {
 	value.RequestID = process.RequestID(request.Context())
+	response.Header().Set("Cache-Control", "no-store")
+	if value.Status == http.StatusUnauthorized {
+		response.Header().Set("WWW-Authenticate", `Bearer realm="tacit"`)
+	}
 	response.Header().Set("Content-Type", "application/problem+json")
 	writeJSON(response, value.Status, value)
 }

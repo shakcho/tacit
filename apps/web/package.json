@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@tanstack/react-query": "catalog:",
+    "@workos-inc/authkit-nextjs": "catalog:",
+    "@workos-inc/node": "catalog:",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "1.65.0",

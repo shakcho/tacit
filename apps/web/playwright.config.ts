@@ -35,7 +35,7 @@ export default defineConfig({
     command: `pnpm start --hostname 127.0.0.1 --port ${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
-    url: `http://127.0.0.1:${port}/meetings`,
+    url: `http://127.0.0.1:${port}/healthz`,
   },
   workers: process.env.CI ? 2 : undefined,
 });
