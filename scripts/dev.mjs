@@ -152,12 +152,35 @@ async function waitForEndpoint(name, url) {
   return false;
 }
 
+async function endpointIsReady(url) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 console.log(`[dev] Web: ${webURL}`);
 console.log(`[dev] API: ${apiHealthURL}`);
 console.log("[dev] Press Ctrl+C to stop all services.");
 
 process.once("SIGINT", () => shutdown("SIGINT", 0));
 process.once("SIGTERM", () => shutdown("SIGTERM", 0));
+
+const existingServices = await Promise.all([
+  endpointIsReady(apiHealthURL),
+  endpointIsReady(webURL),
+]);
+if (existingServices.every(Boolean)) {
+  console.log("[dev] Tacit is already running.");
+  process.exit(0);
+}
+if (existingServices.some(Boolean)) {
+  const service = existingServices[0] ? "API" : "web application";
+  console.error(`[dev] The ${service} is already running without the other service. Stop it before starting Tacit.`);
+  process.exit(1);
+}
 
 if (process.env.TACIT_DATABASE_DIRECT_URL) {
   console.log("[dev] Applying database migrations.");
