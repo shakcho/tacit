@@ -138,6 +138,8 @@ WORKOS_API_KEY=sk_test_replace_me
 WORKOS_COOKIE_PASSWORD="replace_with_generated_value"
 WORKOS_ISSUER=https://issuer-returned-by-discovery.example
 NEXT_PUBLIC_WORKOS_REDIRECT_URI=http://127.0.0.1:3000/auth/callback
+# Use the same organization ID passed to demo-bootstrap so the access token includes org_id.
+TACIT_WORKOS_ORGANIZATION_ID=org_replace_me
 
 TACIT_IDENTITY_NAMESPACE=workos-staging-client_replace_me
 TACIT_WORKOS_CLIENT_ID=client_replace_me
@@ -176,6 +178,8 @@ go run ./cmd/tacit-db demo-bootstrap \
 ```
 
 The namespace argument must exactly equal `TACIT_IDENTITY_NAMESPACE`. The command refuses non-loopback databases and never links accounts by email.
+
+Set `TACIT_WORKOS_ORGANIZATION_ID` to the same WorkOS organization passed to `--external-organization`, then start a new sign-in flow. Without this value, local demo sign-in can create an unscoped WorkOS session whose access token has no `org_id`; Tacit intentionally rejects that token.
 
 ## Verification
 

@@ -1,6 +1,14 @@
+import {
+  parseOptionalWorkOSOrganizationID,
+  type WorkOSOrganizationID,
+} from "@/auth/workos-organization";
+
+type Environment = Readonly<Record<string, string | undefined>>;
+
 export type ServerEnvironment = Readonly<{
   apiOrigin: URL;
   webOrigin: URL;
+  workOSOrganizationID: WorkOSOrganizationID | undefined;
 }>;
 
 function parseServerURL(input: string | undefined, fallback: string, name: string): URL {
@@ -16,9 +24,13 @@ function parseServerURL(input: string | undefined, fallback: string, name: strin
   return value;
 }
 
-export function getServerEnvironment(): ServerEnvironment {
+export function getServerEnvironment(environment: Environment = process.env): ServerEnvironment {
   return Object.freeze({
-    apiOrigin: parseServerURL(process.env.TACIT_API_ORIGIN, "http://127.0.0.1:8080", "TACIT_API_ORIGIN"),
-    webOrigin: parseServerURL(process.env.TACIT_WEB_ORIGIN, "http://127.0.0.1:3000", "TACIT_WEB_ORIGIN"),
+    apiOrigin: parseServerURL(environment.TACIT_API_ORIGIN, "http://127.0.0.1:8080", "TACIT_API_ORIGIN"),
+    webOrigin: parseServerURL(environment.TACIT_WEB_ORIGIN, "http://127.0.0.1:3000", "TACIT_WEB_ORIGIN"),
+    workOSOrganizationID: parseOptionalWorkOSOrganizationID(
+      environment.TACIT_WORKOS_ORGANIZATION_ID,
+      "TACIT_WORKOS_ORGANIZATION_ID",
+    ),
   });
 }

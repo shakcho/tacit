@@ -3,9 +3,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { hasExpectedOrigin } from "@/auth/api-proxy-policy";
+import { isWorkOSOrganizationID } from "@/auth/workos-organization";
 import { getServerEnvironment } from "@/env/server";
-
-const workOSOrganizationID = /^org_[A-Za-z0-9]+$/u;
 
 function failure(status: number, code: string): Response {
   return Response.json({ code, status }, {
@@ -20,7 +19,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const form = await request.formData();
   const organizationID = form.get("organizationId");
-  if (typeof organizationID !== "string" || !workOSOrganizationID.test(organizationID)) {
+  if (typeof organizationID !== "string" || !isWorkOSOrganizationID(organizationID)) {
     return failure(422, "INVALID_ORGANIZATION");
   }
 
