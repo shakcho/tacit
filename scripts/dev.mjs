@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 
+import { normalizePort, portFromAddress, releaseDevelopmentPorts } from "./dev-ports.mjs";
+
 for (const path of [".env.local", ".env"]) {
   try {
     process.loadEnvFile(path);
@@ -10,8 +12,9 @@ for (const path of [".env.local", ".env"]) {
 }
 
 const webHost = process.env.TACIT_WEB_HOST ?? "127.0.0.1";
-const webPort = process.env.TACIT_WEB_PORT ?? "3000";
+const webPort = normalizePort(process.env.TACIT_WEB_PORT ?? "3000", "web port");
 const apiAddress = process.env.TACIT_API_ADDRESS ?? "127.0.0.1:8080";
+const apiPort = portFromAddress(apiAddress);
 
 function reachableHost(host) {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
@@ -152,15 +155,6 @@ async function waitForEndpoint(name, url) {
   return false;
 }
 
-async function endpointIsReady(url) {
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 console.log(`[dev] Web: ${webURL}`);
 console.log(`[dev] API: ${apiHealthURL}`);
 console.log("[dev] Press Ctrl+C to stop all services.");
@@ -168,18 +162,11 @@ console.log("[dev] Press Ctrl+C to stop all services.");
 process.once("SIGINT", () => shutdown("SIGINT", 0));
 process.once("SIGTERM", () => shutdown("SIGTERM", 0));
 
-const existingServices = await Promise.all([
-  endpointIsReady(apiHealthURL),
-  endpointIsReady(webURL),
-]);
-if (existingServices.every(Boolean)) {
-  console.log("[dev] Tacit is already running; this command did not reload .env.local.");
-  console.log("[dev] Stop the existing pnpm dev process with Ctrl+C before restarting after configuration changes.");
-  process.exit(0);
-}
-if (existingServices.some(Boolean)) {
-  const service = existingServices[0] ? "API" : "web application";
-  console.error(`[dev] The ${service} is already running without the other service. Stop it before starting Tacit.`);
+try {
+  await releaseDevelopmentPorts([webPort, apiPort]);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[dev] Could not free the development ports: ${message}`);
   process.exit(1);
 }
 
