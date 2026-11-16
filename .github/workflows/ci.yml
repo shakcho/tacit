@@ -18,7 +18,7 @@ jobs:
           node-version: 26.13.1
       - run: node scripts/check-boundaries.mjs
       - run: node scripts/check-database-budget.mjs
-      - run: node --test scripts/database-budget.test.mjs
+      - run: node --test scripts/*.test.mjs
 
   go:
     runs-on: ubuntu-latest

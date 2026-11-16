@@ -11,7 +11,7 @@ services:
       timeout: 2s
       retries: 15
     ports:
-      - "127.0.0.1:54329:5432"
+      - "127.0.0.1:${TACIT_POSTGRES_PORT:-54330}:5432"
     volumes:
       - tacit-postgres:/var/lib/postgresql/data
 

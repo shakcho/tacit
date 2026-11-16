@@ -16,6 +16,6 @@ PostgreSQL owns product truth, work intent, attempts and accepted outcomes. NATS
 
 OpenAPI owns the product HTTP contract, and Orval generates the Next.js Fetch/TanStack Query client. SSE carries authorized invalidations and replay cursors; raw media and speech streams stay on dedicated data-plane protocols.
 
-The web application may use CASL for presentation, but Go authorization is authoritative for every read, command, event stream, job result, search result and media grant.
+The web application may use CASL for presentation, but Go authorization is authoritative for every read, command, event stream, job result, search result and media grant. See [`authorization.md`](authorization.md) for the policy, authority, and transaction boundaries.
 
 See `boundaries.json` for the machine-enforced import rules and `ownership.md` for review ownership.

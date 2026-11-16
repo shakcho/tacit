@@ -31,7 +31,9 @@ export default async function AccessPage({ params }: AccessPageProps) {
             : "Your identity is verified, but it is not linked to an active Tacit organization membership. Ask a workspace administrator for an invitation."}
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
-          <a className={buttonVariants()} href="/meetings">Try again</a>
+          <a className={buttonVariants()} href={unavailable ? "/meetings" : "/auth/sign-in"}>
+            {unavailable ? "Try again" : "Connect workspace"}
+          </a>
           <form action="/auth/sign-out" method="post">
             <button className={buttonVariants({ variant: "secondary" })} type="submit">Sign out</button>
           </form>

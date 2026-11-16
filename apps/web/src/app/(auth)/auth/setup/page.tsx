@@ -1,7 +1,9 @@
 import { ShieldAlert } from "lucide-react";
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
 import { BrandMark } from "@/components/brand-mark";
+import { hasWorkOSConfiguration } from "@/lib/workos-environment";
 
 export const metadata: Metadata = {
   robots: { follow: false, index: false },
@@ -9,6 +11,8 @@ export const metadata: Metadata = {
 };
 
 export default function IdentitySetupPage() {
+  if (hasWorkOSConfiguration()) redirect("/meetings");
+
   return (
     <main className="grid min-h-screen place-items-center bg-background px-5 py-12">
       <section className="w-full max-w-lg rounded-xl border border-border bg-card p-8" data-enter>

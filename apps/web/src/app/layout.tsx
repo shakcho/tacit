@@ -3,7 +3,7 @@ import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 
-import { QueryProvider } from "@/components/query-provider";
+import { hasWorkOSConfiguration } from "@/lib/workos-environment";
 
 import "./globals.css";
 
@@ -42,22 +42,13 @@ type RootLayoutProps = {
   children: ReactNode;
 };
 
-function hasWorkOSConfiguration(): boolean {
-  return [
-    process.env.WORKOS_CLIENT_ID,
-    process.env.WORKOS_COOKIE_PASSWORD,
-    process.env.WORKOS_ISSUER,
-    process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI,
-  ].every((value) => value !== undefined && value.length > 0);
-}
-
 export default function RootLayout({ children }: RootLayoutProps) {
   const authConfigured = hasWorkOSConfiguration();
   return (
     <html className={geistSans.variable} data-buttons="solid" data-radius="soft" data-type="software" lang="en">
       <body>
         <AuthKitProvider initialAuth={authConfigured ? undefined : { user: null }} onSessionExpired={authConfigured ? undefined : false}>
-          <QueryProvider>{children}</QueryProvider>
+          {children}
         </AuthKitProvider>
       </body>
     </html>

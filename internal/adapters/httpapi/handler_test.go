@@ -28,6 +28,22 @@ type fakeAuthenticator struct {
 	target    access.OrganizationTarget
 }
 
+type verifierStub struct{ identity access.VerifiedIdentity }
+
+func (stub verifierStub) Verify(context.Context, access.BearerToken) (access.VerifiedIdentity, error) {
+	return stub.identity, nil
+}
+
+type resolverStub struct{ admission access.LocalAdmission }
+
+func (stub resolverStub) ResolveIdentity(
+	context.Context,
+	access.VerifiedIdentity,
+	access.OrganizationTarget,
+) (access.LocalAdmission, bool, error) {
+	return stub.admission, true, nil
+}
+
 func (authenticator *fakeAuthenticator) Authenticate(
 	_ context.Context,
 	_ access.BearerToken,
@@ -88,7 +104,23 @@ func principal(t *testing.T) access.LocalPrincipal {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return access.LocalPrincipal{User: user, Organization: organization, Roles: roles}
+	namespace, _ := access.ParseIdentityNamespace("workos-test")
+	subject, _ := access.ParseExternalSubject("user_test")
+	externalOrganization, _ := access.ParseExternalOrganizationID("organization_test")
+	session, _ := access.ParseExternalSessionID("session_test")
+	service := access.NewAuthenticationService(
+		verifierStub{identity: access.VerifiedIdentity{
+			Namespace: namespace, Subject: subject, Organization: externalOrganization, Session: session,
+			IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+		}},
+		resolverStub{admission: access.LocalAdmission{User: user, Organization: organization, Roles: roles}},
+	)
+	token, _ := access.ParseBearerToken("test-token")
+	principal, err := service.Authenticate(t.Context(), token, access.TokenOrganization())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return principal
 }
 
 func createRequest(body, key string) *http.Request {
@@ -190,6 +222,13 @@ func TestServesCanonicalOpenAPIDocument(t *testing.T) {
 			t.Errorf("specification does not contain %q", fragment)
 		}
 	}
+	for _, capability := range access.CapabilityCatalog() {
+		for _, value := range []string{capability.Action.String(), capability.Resource.String(), capability.Scope.String()} {
+			if !strings.Contains(response.Body.String(), value) {
+				t.Errorf("OpenAPI does not contain authorization value %q", value)
+			}
+		}
+	}
 }
 
 func TestAuthenticationSessionMapsFailuresAndReturnsOnlyLocalIdentity(t *testing.T) {
@@ -221,7 +260,11 @@ func TestAuthenticationSessionMapsFailuresAndReturnsOnlyLocalIdentity(t *testing
 	request := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
 	request.Header.Set("Authorization", "Bearer token")
 	identityHandler(t, authenticator, &fakeSessionDenier{}, &fakeLifecycle{}).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"organizationId":"org_0123456789abcdef0123456789abcdef"`)) || !authenticator.target.UsesTokenOrganization() {
+	if response.Code != http.StatusOK ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"organizationId":"org_0123456789abcdef0123456789abcdef"`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"policyRevision":"tacit-authorization-v1"`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"action":"manage_members","allowed":true`)) ||
+		!authenticator.target.UsesTokenOrganization() {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
@@ -288,11 +331,11 @@ func TestTenantBoundaryRequiresExactLocalOrganization(t *testing.T) {
 
 	valid := createRequest(body, "tenant-command-valid")
 	valid.Header.Set("Authorization", "Bearer token")
-	valid.Header.Set("X-Tacit-Organization", principal(t).Organization.String())
+	valid.Header.Set("X-Tacit-Organization", principal(t).OrganizationID().String())
 	validResponse := httptest.NewRecorder()
 	handler.ServeHTTP(validResponse, valid)
 	organization, exact := authenticator.target.Organization()
-	if validResponse.Code != http.StatusCreated || !exact || organization != principal(t).Organization {
+	if validResponse.Code != http.StatusCreated || !exact || organization != principal(t).OrganizationID() {
 		t.Fatalf("tenant request = %d, target = %v, exact = %v", validResponse.Code, organization, exact)
 	}
 }

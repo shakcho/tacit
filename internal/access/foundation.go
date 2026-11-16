@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	ErrOrganizationID = errors.New("invalid organization ID")
-	ErrUserID         = errors.New("invalid user ID")
-	ErrName           = errors.New("invalid name")
-	ErrRoles          = errors.New("invalid membership roles")
+	ErrOrganizationID   = errors.New("invalid organization ID")
+	ErrUserID           = errors.New("invalid user ID")
+	ErrName             = errors.New("invalid name")
+	ErrRoles            = errors.New("invalid membership roles")
+	ErrMembershipChange = errors.New("invalid membership change")
 )
 
 type OrganizationID struct{ value [16]byte }
@@ -25,6 +26,7 @@ func ParseOrganizationID(value string) (OrganizationID, error) {
 
 func (id OrganizationID) String() string  { return formatID("org_", id.value) }
 func (id OrganizationID) Bytes() [16]byte { return id.value }
+func (id OrganizationID) Valid() bool     { return id.value != [16]byte{} }
 
 type UserID struct{ value [16]byte }
 
@@ -35,6 +37,7 @@ func ParseUserID(value string) (UserID, error) {
 
 func (id UserID) String() string  { return formatID("usr_", id.value) }
 func (id UserID) Bytes() [16]byte { return id.value }
+func (id UserID) Valid() bool     { return id.value != [16]byte{} }
 
 func parseID(value, prefix string, invalid error) ([16]byte, error) {
 	var decoded [16]byte
@@ -47,6 +50,9 @@ func parseID(value, prefix string, invalid error) ([16]byte, error) {
 		}
 	}
 	if _, err := hex.Decode(decoded[:], []byte(value[len(prefix):])); err != nil {
+		return [16]byte{}, invalid
+	}
+	if decoded == [16]byte{} {
 		return [16]byte{}, invalid
 	}
 	return decoded, nil
@@ -119,6 +125,10 @@ func (roles Roles) Values() []Role {
 	return values
 }
 
+func (roles Roles) Valid() bool {
+	return roles.bits != 0 && roles.bits&^uint8(0b111) == 0
+}
+
 type MembershipRef struct {
 	Organization OrganizationID
 	User         UserID
@@ -137,22 +147,63 @@ type CreateOrganizationCommand struct {
 	Owner UserID
 }
 
-type AddMembershipCommand struct {
-	Actor UserID
-	Ref   MembershipRef
-	Roles Roles
+type MembershipChangeKind uint8
+
+const (
+	MembershipChangeInvalid MembershipChangeKind = iota
+	MembershipChangeAdd
+	MembershipChangeSetRoles
+	MembershipChangeRemove
+)
+
+type MembershipChange struct {
+	kind   MembershipChangeKind
+	target UserID
+	roles  Roles
+	key    idempotency.Key
 }
 
-type SetMembershipRolesCommand struct {
-	Actor UserID
-	Ref   MembershipRef
-	Roles Roles
+func AddMember(target UserID, roles Roles) (MembershipChange, error) {
+	if !target.Valid() || !roles.Valid() {
+		return MembershipChange{}, ErrMembershipChange
+	}
+	return MembershipChange{kind: MembershipChangeAdd, target: target, roles: roles}, nil
 }
 
-type RemoveMembershipCommand struct {
-	Actor UserID
-	Ref   MembershipRef
-	Key   idempotency.Key
+func SetMemberRoles(target UserID, roles Roles) (MembershipChange, error) {
+	if !target.Valid() || !roles.Valid() {
+		return MembershipChange{}, ErrMembershipChange
+	}
+	return MembershipChange{kind: MembershipChangeSetRoles, target: target, roles: roles}, nil
+}
+
+func RemoveMember(target UserID, key idempotency.Key) (MembershipChange, error) {
+	if !target.Valid() || key.String() == "" {
+		return MembershipChange{}, ErrMembershipChange
+	}
+	return MembershipChange{kind: MembershipChangeRemove, target: target, key: key}, nil
+}
+
+func (change MembershipChange) Kind() MembershipChangeKind { return change.kind }
+func (change MembershipChange) Target() UserID             { return change.target }
+func (change MembershipChange) Roles() (Roles, bool) {
+	return change.roles, change.kind == MembershipChangeAdd || change.kind == MembershipChangeSetRoles
+}
+func (change MembershipChange) Key() (idempotency.Key, bool) {
+	return change.key, change.kind == MembershipChangeRemove
+}
+func (change MembershipChange) Valid() bool {
+	if !change.target.Valid() {
+		return false
+	}
+	switch change.kind {
+	case MembershipChangeAdd, MembershipChangeSetRoles:
+		return change.roles.Valid() && change.key.String() == ""
+	case MembershipChangeRemove:
+		return !change.roles.Valid() && change.key.String() != ""
+	default:
+		return false
+	}
 }
 
 type MembershipOutcome uint8
@@ -164,6 +215,7 @@ const (
 	MembershipLastAdmin
 	MembershipNotFound
 	MembershipConflict
+	MembershipDenied
 )
 
 type MembershipResult struct {
@@ -172,7 +224,7 @@ type MembershipResult struct {
 }
 
 func NewMembershipResult(outcome MembershipOutcome) MembershipResult {
-	if outcome > MembershipConflict {
+	if outcome > MembershipDenied {
 		return MembershipResult{}
 	}
 	return MembershipResult{outcome: outcome}
@@ -190,8 +242,9 @@ func (result MembershipResult) Replayed() bool             { return result.repla
 type Directory interface {
 	CreateUser(context.Context, CreateUserCommand) error
 	CreateOrganization(context.Context, CreateOrganizationCommand) error
-	AddMembership(context.Context, AddMembershipCommand) (MembershipResult, error)
-	SetMembershipRoles(context.Context, SetMembershipRolesCommand) (MembershipResult, error)
-	RemoveMembership(context.Context, RemoveMembershipCommand) (MembershipResult, error)
 	FindMembership(context.Context, MembershipRef) (Membership, bool, error)
+}
+
+type MembershipAdministration interface {
+	AdministerMembership(context.Context, LocalPrincipal, MembershipChange) (MembershipResult, error)
 }

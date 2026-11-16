@@ -95,17 +95,85 @@ func seedOrganization(t *testing.T, store *Store, organization access.Organizati
 	}
 }
 
-func addMember(t *testing.T, store *Store, organization access.OrganizationID, actor, member access.UserID, memberRoles access.Roles) {
+func addMember(t *testing.T, store *Store, organization access.OrganizationID, _ access.UserID, member access.UserID, memberRoles access.Roles) {
 	t.Helper()
 	if err := store.CreateUser(t.Context(), access.CreateUserCommand{ID: member}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.AddMembership(t.Context(), access.AddMembershipCommand{
-		Actor: actor, Ref: access.MembershipRef{Organization: organization, User: member}, Roles: memberRoles,
+	err := store.withTransaction(t.Context(), func(transaction pgx.Tx) error {
+		if err := lockOrganization(t.Context(), transaction, organization); err != nil {
+			return err
+		}
+		ref := access.MembershipRef{Organization: organization, User: member}
+		if _, err := transaction.Exec(t.Context(),
+			`INSERT INTO tacit_organization_memberships (organization_id, user_id) VALUES ($1, $2)`,
+			databaseUUID(organization.Bytes()), databaseUUID(member.Bytes()),
+		); err != nil {
+			return err
+		}
+		return insertRoles(t.Context(), transaction, ref, memberRoles)
 	})
-	if err != nil || result.Outcome() != access.MembershipChanged {
-		t.Fatalf("add membership = %v, %v", result.Outcome(), err)
+	if err != nil {
+		t.Fatalf("add fixture membership: %v", err)
 	}
+}
+
+type integrationVerifier struct{ identity access.VerifiedIdentity }
+
+func (verifier integrationVerifier) Verify(context.Context, access.BearerToken) (access.VerifiedIdentity, error) {
+	return verifier.identity, nil
+}
+
+func memberPrincipal(
+	t *testing.T,
+	store *Store,
+	organization access.OrganizationID,
+	user access.UserID,
+	suffix int,
+) access.LocalPrincipal {
+	t.Helper()
+	namespace, _ := access.ParseIdentityNamespace("workos-integration")
+	subject, _ := access.ParseExternalSubject(fmt.Sprintf("member_%d", suffix))
+	externalOrganization, _ := access.ParseExternalOrganizationID("external_" + organization.String())
+	externalMembership, _ := access.ParseExternalMembershipID(fmt.Sprintf("membership_%d", suffix))
+	session, _ := access.ParseExternalSessionID(fmt.Sprintf("session_%d", suffix))
+	now := time.Now().UTC()
+	identity := access.VerifiedIdentity{
+		Namespace: namespace, Subject: subject, Organization: externalOrganization, Session: session,
+		IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute),
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+        INSERT INTO tacit_identity_subjects (provider, subject, user_id)
+        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		namespace.String(), subject.String(), databaseUUID(user.Bytes()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+        INSERT INTO tacit_identity_organizations (namespace, external_organization_id, organization_id)
+        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		namespace.String(), externalOrganization.String(), databaseUUID(organization.Bytes()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+        INSERT INTO tacit_identity_membership_admissions (
+            namespace, external_organization_id, subject, external_membership_id,
+            state, source_updated_at, source_event_id
+        ) VALUES ($1, $2, $3, $4, 'active', $5, $6)
+        ON CONFLICT (namespace, external_organization_id, subject) DO UPDATE SET state = 'active'`,
+		namespace.String(), externalOrganization.String(), subject.String(), externalMembership.String(), now,
+		fmt.Sprintf("fixture_%d", suffix),
+	); err != nil {
+		t.Fatal(err)
+	}
+	service := access.NewAuthenticationService(integrationVerifier{identity: identity}, store)
+	token, _ := access.ParseBearerToken("integration-token")
+	principal, err := service.Authenticate(t.Context(), token, access.ExactOrganization(organization))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return principal
 }
 
 func TestMigrationsAreRepeatable(t *testing.T) {
@@ -252,10 +320,17 @@ func TestConcurrentAdminRemovalKeepsOneAdmin(t *testing.T) {
 	first, second := userID(t, 10), userID(t, 11)
 	seedOrganization(t, store, organization, first)
 	addMember(t, store, organization, first, second, roles(t, access.RoleAdmin))
+	firstPrincipal := memberPrincipal(t, store, organization, first, 10)
+	secondPrincipal := memberPrincipal(t, store, organization, second, 11)
 
-	commands := []access.RemoveMembershipCommand{
-		{Actor: first, Ref: access.MembershipRef{Organization: organization, User: second}, Key: key(t, "remove-second")},
-		{Actor: second, Ref: access.MembershipRef{Organization: organization, User: first}, Key: key(t, "remove-first")},
+	firstChange, _ := access.RemoveMember(second, key(t, "remove-second"))
+	secondChange, _ := access.RemoveMember(first, key(t, "remove-first"))
+	commands := []struct {
+		principal access.LocalPrincipal
+		change    access.MembershipChange
+	}{
+		{principal: firstPrincipal, change: firstChange},
+		{principal: secondPrincipal, change: secondChange},
 	}
 	results := make(chan access.MembershipResult, len(commands))
 	errors := make(chan error, len(commands))
@@ -264,7 +339,7 @@ func TestConcurrentAdminRemovalKeepsOneAdmin(t *testing.T) {
 	for _, command := range commands {
 		group.Go(func() {
 			<-start
-			result, err := store.RemoveMembership(context.Background(), command)
+			result, err := store.AdministerMembership(context.Background(), command.principal, command.change)
 			results <- result
 			errors <- err
 		})
@@ -282,7 +357,7 @@ func TestConcurrentAdminRemovalKeepsOneAdmin(t *testing.T) {
 	for result := range results {
 		counts[result.Outcome()]++
 	}
-	if counts[access.MembershipChanged] != 1 || counts[access.MembershipLastAdmin] != 1 {
+	if counts[access.MembershipChanged] != 1 || counts[access.MembershipDenied] != 1 {
 		t.Fatalf("outcomes = %v", counts)
 	}
 	var admins, removalAudits int
@@ -303,22 +378,111 @@ func TestConcurrentAdminRemovalKeepsOneAdmin(t *testing.T) {
 	}
 }
 
+func TestAuthorizedMembershipAdministrationPreservesFinalAdminAndRechecksRevocation(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 15)
+	owner, member := userID(t, 15), userID(t, 16)
+	seedOrganization(t, store, organization, owner)
+	addMember(t, store, organization, owner, member, roles(t, access.RoleEditor))
+	principal := memberPrincipal(t, store, organization, owner, 15)
+
+	removeSelf, _ := access.RemoveMember(owner, key(t, "remove-final-admin"))
+	result, err := store.AdministerMembership(t.Context(), principal, removeSelf)
+	if err != nil || result.Outcome() != access.MembershipLastAdmin {
+		t.Fatalf("remove final admin = %v, %v", result.Outcome(), err)
+	}
+
+	removeMember, _ := access.RemoveMember(member, key(t, "remove-before-revocation"))
+	result, err = store.AdministerMembership(t.Context(), principal, removeMember)
+	if err != nil || result.Outcome() != access.MembershipChanged {
+		t.Fatalf("initial removal = %v, %v", result.Outcome(), err)
+	}
+	identity, ok := principal.RevalidationIdentity()
+	if !ok {
+		t.Fatal("principal has no revalidation identity")
+	}
+	if err := store.DenySession(t.Context(), identity); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := store.AdministerMembership(t.Context(), principal, removeMember)
+	if err != nil || replay.Outcome() != access.MembershipDenied || replay.Replayed() {
+		t.Fatalf("revoked replay = %v replayed=%v, %v", replay.Outcome(), replay.Replayed(), err)
+	}
+
+	var receipts, removalAudits int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FROM tacit_idempotency_records
+        WHERE organization_id = $1 AND client_key = 'remove-before-revocation'`,
+		databaseUUID(organization.Bytes()),
+	).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FROM tacit_access_audit
+        WHERE organization_id = $1 AND action = 'membership.removed'`,
+		databaseUUID(organization.Bytes()),
+	).Scan(&removalAudits); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 1 || removalAudits != 1 {
+		t.Fatalf("receipts=%d removalAudits=%d", receipts, removalAudits)
+	}
+}
+
+func TestAuthorizedMembershipAdministrationAddsSetsAndDeniesNonAdmin(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 18)
+	owner, member, other := userID(t, 18), userID(t, 19), userID(t, 20)
+	seedOrganization(t, store, organization, owner)
+	if err := store.CreateUser(t.Context(), access.CreateUserCommand{ID: member}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateUser(t.Context(), access.CreateUserCommand{ID: other}); err != nil {
+		t.Fatal(err)
+	}
+	ownerPrincipal := memberPrincipal(t, store, organization, owner, 18)
+
+	add, _ := access.AddMember(member, roles(t, access.RoleViewer))
+	result, err := store.AdministerMembership(t.Context(), ownerPrincipal, add)
+	if err != nil || result.Outcome() != access.MembershipChanged {
+		t.Fatalf("add = %v, %v", result.Outcome(), err)
+	}
+	set, _ := access.SetMemberRoles(member, roles(t, access.RoleEditor))
+	result, err = store.AdministerMembership(t.Context(), ownerPrincipal, set)
+	if err != nil || result.Outcome() != access.MembershipChanged {
+		t.Fatalf("set = %v, %v", result.Outcome(), err)
+	}
+	membership, found, err := store.FindMembership(t.Context(), access.MembershipRef{Organization: organization, User: member})
+	if err != nil || !found || !membership.Roles.Has(access.RoleEditor) || membership.Roles.Has(access.RoleViewer) {
+		t.Fatalf("membership = %#v found=%v, %v", membership, found, err)
+	}
+
+	editorPrincipal := memberPrincipal(t, store, organization, member, 19)
+	unauthorizedAdd, _ := access.AddMember(other, roles(t, access.RoleViewer))
+	result, err = store.AdministerMembership(t.Context(), editorPrincipal, unauthorizedAdd)
+	if err != nil || result.Outcome() != access.MembershipDenied {
+		t.Fatalf("editor add = %v, %v", result.Outcome(), err)
+	}
+	if _, found, err := store.FindMembership(t.Context(), access.MembershipRef{Organization: organization, User: other}); err != nil || found {
+		t.Fatalf("unauthorized membership found=%v, %v", found, err)
+	}
+}
+
 func TestConcurrentDuplicateCommandHasOneEffect(t *testing.T) {
 	store := integrationStore(t)
 	organization := organizationID(t, 20)
 	owner, member := userID(t, 20), userID(t, 21)
 	seedOrganization(t, store, organization, owner)
 	addMember(t, store, organization, owner, member, roles(t, access.RoleEditor))
-	command := access.RemoveMembershipCommand{
-		Actor: owner, Ref: access.MembershipRef{Organization: organization, User: member}, Key: key(t, "same-command"),
-	}
+	principal := memberPrincipal(t, store, organization, owner, 20)
+	command, _ := access.RemoveMember(member, key(t, "same-command"))
 
 	results := make(chan access.MembershipResult, 32)
 	errors := make(chan error, 32)
 	var group sync.WaitGroup
 	for range 32 {
 		group.Go(func() {
-			result, err := store.RemoveMembership(context.Background(), command)
+			result, err := store.AdministerMembership(context.Background(), principal, command)
 			results <- result
 			errors <- err
 		})
@@ -359,9 +523,8 @@ func TestConcurrentDuplicateCommandHasOneEffect(t *testing.T) {
 		t.Fatalf("receipts = %d, removal audits = %d", receipts, removalAudits)
 	}
 
-	other := command
-	other.Ref.User = owner
-	conflict, err := store.RemoveMembership(t.Context(), other)
+	other, _ := access.RemoveMember(owner, key(t, "same-command"))
+	conflict, err := store.AdministerMembership(t.Context(), principal, other)
 	if err != nil || conflict.Outcome() != access.MembershipConflict {
 		t.Fatalf("changed command = %v, %v", conflict.Outcome(), err)
 	}

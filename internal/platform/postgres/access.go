@@ -8,16 +8,19 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/shakcho/tacit/internal/access"
+	"github.com/shakcho/tacit/internal/runtime/idempotency"
 )
 
 const removeMembershipScope = "access.remove-membership.v1"
 
 var _ access.Directory = (*Store)(nil)
+var _ access.MembershipAdministration = (*Store)(nil)
 
 func (store *Store) CreateUser(ctx context.Context, command access.CreateUserCommand) error {
 	_, err := store.pool.Exec(ctx, `INSERT INTO tacit_users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, databaseUUID(command.ID.Bytes()))
@@ -50,156 +53,203 @@ func (store *Store) CreateOrganization(ctx context.Context, command access.Creat
 	})
 }
 
-func (store *Store) AddMembership(ctx context.Context, command access.AddMembershipCommand) (access.MembershipResult, error) {
+func (store *Store) AdministerMembership(
+	ctx context.Context,
+	principal access.LocalPrincipal,
+	change access.MembershipChange,
+) (access.MembershipResult, error) {
 	result := access.NewMembershipResult(access.MembershipUnavailable)
+	identity, identityValid := principal.RevalidationIdentity()
+	if !identityValid || !change.Valid() || !principal.ValidAt(time.Now()) {
+		return access.NewMembershipResult(access.MembershipDenied), nil
+	}
+	organization := principal.OrganizationID()
 	err := store.withTransaction(ctx, func(transaction pgx.Tx) error {
-		if err := lockOrganization(ctx, transaction, command.Ref.Organization); err != nil {
+		if err := lockIdentityNamespace(ctx, transaction, identity.Namespace, true); err != nil {
 			return err
 		}
-		organizationID := databaseUUID(command.Ref.Organization.Bytes())
-		userID := databaseUUID(command.Ref.User.Bytes())
-		tag, err := transaction.Exec(ctx,
-			`INSERT INTO tacit_organization_memberships (organization_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			organizationID, userID,
-		)
-		if err != nil {
-			return fmt.Errorf("insert membership: %w", err)
+		if err := lockOrganization(ctx, transaction, organization); err != nil {
+			return err
 		}
-		if tag.RowsAffected() == 0 {
-			result = access.NewMembershipResult(access.MembershipConflict)
+		admission, found, err := resolveIdentity(ctx, transaction, identity, access.ExactOrganization(organization))
+		if err != nil {
+			return err
+		}
+		fresh, current := principal.Revalidated(admission)
+		if !found || !current || !fresh.ValidAt(time.Now()) ||
+			!access.ContextDecisions(fresh).AllowsCapability(access.ActionManageMembers, access.ResourceAdministration) {
+			result = access.NewMembershipResult(access.MembershipDenied)
 			return nil
 		}
-		if err := insertRoles(ctx, transaction, command.Ref, command.Roles); err != nil {
-			return err
+		ref := access.MembershipRef{Organization: organization, User: change.Target()}
+		switch change.Kind() {
+		case access.MembershipChangeAdd:
+			roles, _ := change.Roles()
+			return addMembership(ctx, transaction, fresh.UserID(), ref, roles, &result)
+		case access.MembershipChangeSetRoles:
+			roles, _ := change.Roles()
+			return setMembershipRoles(ctx, transaction, fresh.UserID(), ref, roles, &result)
+		case access.MembershipChangeRemove:
+			key, _ := change.Key()
+			return removeMembership(ctx, transaction, fresh.UserID(), ref, key, &result)
+		default:
+			result = access.NewMembershipResult(access.MembershipDenied)
+			return nil
 		}
-		if err := insertAudit(ctx, transaction, command.Ref.Organization, command.Actor, command.Ref.User, "membership.added"); err != nil {
-			return err
-		}
-		result = access.NewMembershipResult(access.MembershipChanged)
-		return nil
 	})
 	return result, err
 }
 
-func (store *Store) SetMembershipRoles(ctx context.Context, command access.SetMembershipRolesCommand) (access.MembershipResult, error) {
-	result := access.NewMembershipResult(access.MembershipUnavailable)
-	err := store.withTransaction(ctx, func(transaction pgx.Tx) error {
-		if err := lockOrganization(ctx, transaction, command.Ref.Organization); err != nil {
-			return err
-		}
-		current, found, err := findRoles(ctx, transaction, command.Ref)
-		if err != nil {
-			return err
-		}
-		if !found {
-			result = access.NewMembershipResult(access.MembershipNotFound)
-			return nil
-		}
-		if sameRoles(current, command.Roles) {
-			result = access.NewMembershipResult(access.MembershipUnchanged)
-			return nil
-		}
-		if current.Has(access.RoleAdmin) && !command.Roles.Has(access.RoleAdmin) {
-			last, err := isLastAdmin(ctx, transaction, command.Ref.Organization)
-			if err != nil {
-				return err
-			}
-			if last {
-				result = access.NewMembershipResult(access.MembershipLastAdmin)
-				return nil
-			}
-		}
-		organizationID := databaseUUID(command.Ref.Organization.Bytes())
-		userID := databaseUUID(command.Ref.User.Bytes())
-		if _, err := transaction.Exec(ctx,
-			`DELETE FROM tacit_membership_roles WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
-		); err != nil {
-			return fmt.Errorf("replace membership roles: %w", err)
-		}
-		if err := insertRoles(ctx, transaction, command.Ref, command.Roles); err != nil {
-			return err
-		}
-		if _, err := transaction.Exec(ctx,
-			`UPDATE tacit_organization_memberships SET updated_at = now() WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
-		); err != nil {
-			return fmt.Errorf("update membership timestamp: %w", err)
-		}
-		if err := insertAudit(ctx, transaction, command.Ref.Organization, command.Actor, command.Ref.User, "membership.roles.changed"); err != nil {
-			return err
-		}
-		result = access.NewMembershipResult(access.MembershipChanged)
+func addMembership(
+	ctx context.Context,
+	transaction pgx.Tx,
+	actor access.UserID,
+	ref access.MembershipRef,
+	roles access.Roles,
+	result *access.MembershipResult,
+) error {
+	organizationID := databaseUUID(ref.Organization.Bytes())
+	userID := databaseUUID(ref.User.Bytes())
+	tag, err := transaction.Exec(ctx,
+		`INSERT INTO tacit_organization_memberships (organization_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		organizationID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("insert membership: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		*result = access.NewMembershipResult(access.MembershipConflict)
 		return nil
-	})
-	return result, err
+	}
+	if err := insertRoles(ctx, transaction, ref, roles); err != nil {
+		return err
+	}
+	if err := insertAudit(ctx, transaction, ref.Organization, actor, ref.User, "membership.added"); err != nil {
+		return err
+	}
+	*result = access.NewMembershipResult(access.MembershipChanged)
+	return nil
 }
 
-func (store *Store) RemoveMembership(ctx context.Context, command access.RemoveMembershipCommand) (access.MembershipResult, error) {
-	result := access.NewMembershipResult(access.MembershipUnavailable)
-	fingerprint := removeMembershipFingerprint(command)
-	err := store.withTransaction(ctx, func(transaction pgx.Tx) error {
-		lockName := command.Ref.Organization.String() + ":" + removeMembershipScope + ":" + command.Key.String()
-		if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockName); err != nil {
-			return fmt.Errorf("lock idempotency key: %w", err)
-		}
-		priorFingerprint, priorCode, found, err := findReceipt(ctx, transaction, command)
+func setMembershipRoles(
+	ctx context.Context,
+	transaction pgx.Tx,
+	actor access.UserID,
+	ref access.MembershipRef,
+	roles access.Roles,
+	result *access.MembershipResult,
+) error {
+	current, found, err := findRoles(ctx, transaction, ref)
+	if err != nil {
+		return err
+	}
+	if !found {
+		*result = access.NewMembershipResult(access.MembershipNotFound)
+		return nil
+	}
+	if sameRoles(current, roles) {
+		*result = access.NewMembershipResult(access.MembershipUnchanged)
+		return nil
+	}
+	if current.Has(access.RoleAdmin) && !roles.Has(access.RoleAdmin) {
+		last, err := isLastAdmin(ctx, transaction, ref.Organization)
 		if err != nil {
 			return err
 		}
-		if found {
-			if !bytes.Equal(priorFingerprint, fingerprint[:]) {
-				result = access.NewMembershipResult(access.MembershipConflict)
-				return nil
-			}
-			if access.MembershipOutcome(priorCode) != access.MembershipChanged {
-				return fmt.Errorf("stored membership result is invalid")
-			}
-			result = access.NewReplayedMembershipResult(access.MembershipChanged)
+		if last {
+			*result = access.NewMembershipResult(access.MembershipLastAdmin)
 			return nil
 		}
-		if err := lockOrganization(ctx, transaction, command.Ref.Organization); err != nil {
-			return err
+	}
+	organizationID := databaseUUID(ref.Organization.Bytes())
+	userID := databaseUUID(ref.User.Bytes())
+	if _, err := transaction.Exec(ctx,
+		`DELETE FROM tacit_membership_roles WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
+	); err != nil {
+		return fmt.Errorf("replace membership roles: %w", err)
+	}
+	if err := insertRoles(ctx, transaction, ref, roles); err != nil {
+		return err
+	}
+	if _, err := transaction.Exec(ctx,
+		`UPDATE tacit_organization_memberships SET updated_at = now() WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
+	); err != nil {
+		return fmt.Errorf("update membership timestamp: %w", err)
+	}
+	if err := insertAudit(ctx, transaction, ref.Organization, actor, ref.User, "membership.roles.changed"); err != nil {
+		return err
+	}
+	*result = access.NewMembershipResult(access.MembershipChanged)
+	return nil
+}
+
+func removeMembership(
+	ctx context.Context,
+	transaction pgx.Tx,
+	actor access.UserID,
+	ref access.MembershipRef,
+	key idempotency.Key,
+	result *access.MembershipResult,
+) error {
+	fingerprint := removeMembershipFingerprint(actor, ref)
+	lockName := ref.Organization.String() + ":" + removeMembershipScope + ":" + key.String()
+	if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockName); err != nil {
+		return fmt.Errorf("lock idempotency key: %w", err)
+	}
+	priorFingerprint, priorCode, found, err := findReceipt(ctx, transaction, ref.Organization, key)
+	if err != nil {
+		return err
+	}
+	if found {
+		if !bytes.Equal(priorFingerprint, fingerprint[:]) {
+			*result = access.NewMembershipResult(access.MembershipConflict)
+			return nil
 		}
-		roles, memberFound, err := findRoles(ctx, transaction, command.Ref)
+		if access.MembershipOutcome(priorCode) != access.MembershipChanged {
+			return fmt.Errorf("stored membership result is invalid")
+		}
+		*result = access.NewReplayedMembershipResult(access.MembershipChanged)
+		return nil
+	}
+	roles, memberFound, err := findRoles(ctx, transaction, ref)
+	if err != nil {
+		return err
+	}
+	if !memberFound {
+		*result = access.NewMembershipResult(access.MembershipNotFound)
+		return nil
+	}
+	if roles.Has(access.RoleAdmin) {
+		last, err := isLastAdmin(ctx, transaction, ref.Organization)
 		if err != nil {
 			return err
 		}
-		if !memberFound {
-			result = access.NewMembershipResult(access.MembershipNotFound)
+		if last {
+			*result = access.NewMembershipResult(access.MembershipLastAdmin)
 			return nil
 		}
-		if roles.Has(access.RoleAdmin) {
-			last, err := isLastAdmin(ctx, transaction, command.Ref.Organization)
-			if err != nil {
-				return err
-			}
-			if last {
-				result = access.NewMembershipResult(access.MembershipLastAdmin)
-				return nil
-			}
-		}
-		organizationID := databaseUUID(command.Ref.Organization.Bytes())
-		userID := databaseUUID(command.Ref.User.Bytes())
-		if _, err := transaction.Exec(ctx,
-			`DELETE FROM tacit_organization_memberships WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
-		); err != nil {
-			return fmt.Errorf("remove membership: %w", err)
-		}
-		if err := insertAudit(ctx, transaction, command.Ref.Organization, command.Actor, command.Ref.User, "membership.removed"); err != nil {
-			return err
-		}
-		result = access.NewMembershipResult(access.MembershipChanged)
-		if _, err := transaction.Exec(ctx, `
+	}
+	organizationID := databaseUUID(ref.Organization.Bytes())
+	userID := databaseUUID(ref.User.Bytes())
+	if _, err := transaction.Exec(ctx,
+		`DELETE FROM tacit_organization_memberships WHERE organization_id = $1 AND user_id = $2`, organizationID, userID,
+	); err != nil {
+		return fmt.Errorf("remove membership: %w", err)
+	}
+	if err := insertAudit(ctx, transaction, ref.Organization, actor, ref.User, "membership.removed"); err != nil {
+		return err
+	}
+	*result = access.NewMembershipResult(access.MembershipChanged)
+	if _, err := transaction.Exec(ctx, `
             INSERT INTO tacit_idempotency_records (
                 organization_id, operation_scope, client_key, fingerprint_version,
                 request_fingerprint, result_version, result_code
             ) VALUES ($1, $2, $3, 1, $4, 1, $5)`,
-			organizationID, removeMembershipScope, command.Key.String(), fingerprint[:], result.Outcome(),
-		); err != nil {
-			return fmt.Errorf("record membership command: %w", err)
-		}
-		return nil
-	})
-	return result, err
+		organizationID, removeMembershipScope, key.String(), fingerprint[:], result.Outcome(),
+	); err != nil {
+		return fmt.Errorf("record membership command: %w", err)
+	}
+	return nil
 }
 
 func (store *Store) FindMembership(ctx context.Context, ref access.MembershipRef) (access.Membership, bool, error) {
@@ -355,14 +405,19 @@ func randomUUID() ([16]byte, error) {
 	return value, nil
 }
 
-func findReceipt(ctx context.Context, transaction pgx.Tx, command access.RemoveMembershipCommand) ([]byte, int16, bool, error) {
+func findReceipt(
+	ctx context.Context,
+	transaction pgx.Tx,
+	organization access.OrganizationID,
+	key idempotency.Key,
+) ([]byte, int16, bool, error) {
 	var fingerprint []byte
 	var resultCode int16
 	err := transaction.QueryRow(ctx, `
         SELECT request_fingerprint, result_code
         FROM tacit_idempotency_records
         WHERE organization_id = $1 AND operation_scope = $2 AND client_key = $3`,
-		databaseUUID(command.Ref.Organization.Bytes()), removeMembershipScope, command.Key.String(),
+		databaseUUID(organization.Bytes()), removeMembershipScope, key.String(),
 	).Scan(&fingerprint, &resultCode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, 0, false, nil
@@ -373,8 +428,8 @@ func findReceipt(ctx context.Context, transaction pgx.Tx, command access.RemoveM
 	return fingerprint, resultCode, true, nil
 }
 
-func removeMembershipFingerprint(command access.RemoveMembershipCommand) [32]byte {
-	value := command.Actor.String() + "\x00" + command.Ref.Organization.String() + "\x00" + command.Ref.User.String()
+func removeMembershipFingerprint(actor access.UserID, ref access.MembershipRef) [32]byte {
+	value := actor.String() + "\x00" + ref.Organization.String() + "\x00" + ref.User.String()
 	return sha256.Sum256([]byte(value))
 }
 

@@ -26,9 +26,22 @@ func (store *Store) ResolveIdentity(
 	ctx context.Context,
 	identity access.VerifiedIdentity,
 	target access.OrganizationTarget,
-) (access.LocalPrincipal, bool, error) {
+) (access.LocalAdmission, bool, error) {
+	return resolveIdentity(ctx, store.pool, identity, target)
+}
+
+type rowScannerQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func resolveIdentity(
+	ctx context.Context,
+	query rowScannerQueryer,
+	identity access.VerifiedIdentity,
+	target access.OrganizationTarget,
+) (access.LocalAdmission, bool, error) {
 	if !target.Valid() {
-		return access.LocalPrincipal{}, false, errors.New("invalid organization target")
+		return access.LocalAdmission{}, false, errors.New("invalid organization target")
 	}
 	exactOrganization, exact := target.Organization()
 	var requestedOrganization any
@@ -37,7 +50,7 @@ func (store *Store) ResolveIdentity(
 	}
 	var userUUID, organizationUUID pgtype.UUID
 	var roleValues []string
-	err := store.pool.QueryRow(ctx, `
+	err := query.QueryRow(ctx, `
         SELECT subjects.user_id, organizations.organization_id,
                array_agg(roles.role ORDER BY roles.role)
         FROM tacit_identity_subjects AS subjects
@@ -76,39 +89,44 @@ func (store *Store) ResolveIdentity(
 		identity.IssuedAt, exact, requestedOrganization,
 	).Scan(&userUUID, &organizationUUID, &roleValues)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return access.LocalPrincipal{}, false, nil
+		return access.LocalAdmission{}, false, nil
 	}
 	if err != nil {
-		return access.LocalPrincipal{}, false, fmt.Errorf("resolve identity admission: %w", err)
+		return access.LocalAdmission{}, false, fmt.Errorf("resolve identity admission: %w", err)
 	}
 	user, err := access.ParseUserID("usr_" + hex.EncodeToString(userUUID.Bytes[:]))
 	if err != nil {
-		return access.LocalPrincipal{}, false, fmt.Errorf("parse stored user identity: %w", err)
+		return access.LocalAdmission{}, false, fmt.Errorf("parse stored user identity: %w", err)
 	}
 	organization, err := access.ParseOrganizationID("org_" + hex.EncodeToString(organizationUUID.Bytes[:]))
 	if err != nil {
-		return access.LocalPrincipal{}, false, fmt.Errorf("parse stored organization identity: %w", err)
+		return access.LocalAdmission{}, false, fmt.Errorf("parse stored organization identity: %w", err)
 	}
 	roles, err := storedRoles(roleValues)
 	if err != nil {
-		return access.LocalPrincipal{}, false, err
+		return access.LocalAdmission{}, false, err
 	}
-	return access.LocalPrincipal{User: user, Organization: organization, Roles: roles}, true, nil
+	return access.LocalAdmission{User: user, Organization: organization, Roles: roles}, true, nil
 }
 
 func (store *Store) DenySession(ctx context.Context, identity access.VerifiedIdentity) error {
 	if identity.Namespace.String() == "" || identity.Session.String() == "" {
 		return errors.New("invalid identity session")
 	}
-	if _, err := store.pool.Exec(ctx, `
-        INSERT INTO tacit_identity_session_denials (namespace, session_id)
-        VALUES ($1, $2)
-        ON CONFLICT (namespace, session_id) DO NOTHING`,
-		identity.Namespace.String(), identity.Session.String(),
-	); err != nil {
-		return fmt.Errorf("deny identity session: %w", err)
-	}
-	return nil
+	return store.withTransaction(ctx, func(transaction pgx.Tx) error {
+		if err := lockIdentityNamespace(ctx, transaction, identity.Namespace, false); err != nil {
+			return err
+		}
+		if _, err := transaction.Exec(ctx, `
+            INSERT INTO tacit_identity_session_denials (namespace, session_id)
+            VALUES ($1, $2)
+            ON CONFLICT (namespace, session_id) DO NOTHING`,
+			identity.Namespace.String(), identity.Session.String(),
+		); err != nil {
+			return fmt.Errorf("deny identity session: %w", err)
+		}
+		return nil
+	})
 }
 
 func (store *Store) ApplyLifecycle(ctx context.Context, event access.LifecycleEvent) (access.LifecycleOutcome, error) {
@@ -117,6 +135,9 @@ func (store *Store) ApplyLifecycle(ctx context.Context, event access.LifecycleEv
 	}
 	result := access.LifecycleUnavailable
 	err := store.withTransaction(ctx, func(transaction pgx.Tx) error {
+		if err := lockIdentityNamespace(ctx, transaction, event.Namespace, false); err != nil {
+			return err
+		}
 		outcome := "applied"
 		if event.Kind == access.LifecycleIgnored {
 			outcome = "ignored"
@@ -284,6 +305,9 @@ func applyInvitationAcceptance(ctx context.Context, transaction pgx.Tx, event ac
 	if mappedOrganization != grantOrganization {
 		return access.ErrInvitationConflict
 	}
+	if err := lockDatabaseOrganization(ctx, transaction, grantOrganization); err != nil {
+		return err
+	}
 	if state == "accepted" {
 		if !acceptedSubject.Valid || acceptedSubject.String != event.Subject.String() || !acceptedUser.Valid {
 			return access.ErrInvitationConflict
@@ -417,10 +441,14 @@ func applyMembershipDenial(ctx context.Context, transaction pgx.Tx, event access
 
 func (store *Store) BootstrapIdentity(ctx context.Context, bootstrap access.BootstrapIdentity) error {
 	if bootstrap.Namespace.String() == "" || bootstrap.Subject.String() == "" ||
-		bootstrap.ExternalOrganization.String() == "" || bootstrap.ExternalMembership.String() == "" {
+		bootstrap.ExternalOrganization.String() == "" || bootstrap.ExternalMembership.String() == "" ||
+		!bootstrap.User.Valid() || !bootstrap.Organization.Valid() || bootstrap.OrganizationName.String() == "" {
 		return errors.New("invalid identity bootstrap")
 	}
 	return store.withTransaction(ctx, func(transaction pgx.Tx) error {
+		if err := lockIdentityNamespace(ctx, transaction, bootstrap.Namespace, false); err != nil {
+			return err
+		}
 		userID := databaseUUID(bootstrap.User.Bytes())
 		organizationID := databaseUUID(bootstrap.Organization.Bytes())
 		if _, err := transaction.Exec(ctx, `INSERT INTO tacit_users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, userID); err != nil {
@@ -430,6 +458,9 @@ func (store *Store) BootstrapIdentity(ctx context.Context, bootstrap access.Boot
             INSERT INTO tacit_organizations (id, name) VALUES ($1, $2)
             ON CONFLICT (id) DO NOTHING`, organizationID, bootstrap.OrganizationName.String()); err != nil {
 			return fmt.Errorf("bootstrap organization: %w", err)
+		}
+		if err := lockOrganization(ctx, transaction, bootstrap.Organization); err != nil {
+			return err
 		}
 		if _, err := transaction.Exec(ctx, `
             INSERT INTO tacit_organization_memberships (organization_id, user_id)
@@ -553,4 +584,37 @@ func storedRoles(values []string) (access.Roles, error) {
 		return access.Roles{}, fmt.Errorf("stored identity membership has no valid roles: %w", err)
 	}
 	return parsed, nil
+}
+
+func lockIdentityNamespace(
+	ctx context.Context,
+	transaction pgx.Tx,
+	namespace access.IdentityNamespace,
+	shared bool,
+) error {
+	if namespace.String() == "" {
+		return errors.New("invalid identity namespace lock")
+	}
+	statement := `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	if shared {
+		statement = `SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))`
+	}
+	if _, err := transaction.Exec(ctx, statement, "tacit.identity-namespace.v1:"+namespace.String()); err != nil {
+		return fmt.Errorf("lock identity namespace: %w", err)
+	}
+	return nil
+}
+
+func lockDatabaseOrganization(ctx context.Context, transaction pgx.Tx, organization pgtype.UUID) error {
+	var exists bool
+	err := transaction.QueryRow(ctx,
+		`SELECT true FROM tacit_organizations WHERE id = $1 FOR UPDATE`, organization,
+	).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("organization not found")
+	}
+	if err != nil {
+		return fmt.Errorf("lock organization: %w", err)
+	}
+	return nil
 }

@@ -1,15 +1,20 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 
-try {
-  process.loadEnvFile(".env");
-} catch (error) {
-  if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+import { normalizePort, portFromAddress, releaseDevelopmentPorts } from "./dev-ports.mjs";
+
+for (const path of [".env.local", ".env"]) {
+  try {
+    process.loadEnvFile(path);
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+  }
 }
 
 const webHost = process.env.TACIT_WEB_HOST ?? "127.0.0.1";
-const webPort = process.env.TACIT_WEB_PORT ?? "3000";
+const webPort = normalizePort(process.env.TACIT_WEB_PORT ?? "3000", "web port");
 const apiAddress = process.env.TACIT_API_ADDRESS ?? "127.0.0.1:8080";
+const apiPort = portFromAddress(apiAddress);
 
 function reachableHost(host) {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
@@ -92,6 +97,42 @@ function startService(service) {
   });
 }
 
+function runRequiredCommand(command) {
+  return new Promise((resolve) => {
+    const child = spawn(command.executable, command.args, {
+      detached: process.platform !== "win32",
+      env: process.env,
+      stdio: "inherit",
+    });
+    children.set(command.name, child);
+    let finished = false;
+
+    function finish(succeeded) {
+      if (finished) return;
+      finished = true;
+      resolve(succeeded);
+    }
+
+    child.once("error", (error) => {
+      children.delete(command.name);
+      console.error(`[dev] Could not start ${command.name}: ${error.message}`);
+      exitCode = 1;
+      finish(false);
+    });
+
+    child.once("exit", (code, signal) => {
+      children.delete(command.name);
+      const succeeded = code === 0;
+      if (!succeeded && !shuttingDown) {
+        console.error(`[dev] ${command.name} failed (${signal ?? `code ${code ?? 1}`}).`);
+        exitCode = code ?? 1;
+      }
+      if (shuttingDown && children.size === 0) process.exit(exitCode);
+      finish(succeeded);
+    });
+  });
+}
+
 async function waitForEndpoint(name, url) {
   const deadline = Date.now() + 60_000;
   while (!shuttingDown && Date.now() < deadline) {
@@ -120,6 +161,28 @@ console.log("[dev] Press Ctrl+C to stop all services.");
 
 process.once("SIGINT", () => shutdown("SIGINT", 0));
 process.once("SIGTERM", () => shutdown("SIGTERM", 0));
+
+try {
+  await releaseDevelopmentPorts([webPort, apiPort]);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[dev] Could not free the development ports: ${message}`);
+  process.exit(1);
+}
+
+if (process.env.TACIT_DATABASE_DIRECT_URL) {
+  console.log("[dev] Applying database migrations.");
+  const migrated = await runRequiredCommand({
+    args: ["run", "./cmd/tacit-db", "migrate"],
+    executable: "go",
+    name: "database migration",
+  });
+  if (!migrated) {
+    if (!shuttingDown) process.exit(exitCode || 1);
+  }
+} else {
+  console.log("[dev] Database migration skipped because TACIT_DATABASE_DIRECT_URL is not configured.");
+}
 
 for (const service of services) startService(service);
 
