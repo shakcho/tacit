@@ -19,7 +19,8 @@ func TestPartialIdentityConfigurationFailsClosed(t *testing.T) {
 
 	handler, closeDependencies, err := newProductionHandler(context.Background())
 	if err == nil || handler != nil || closeDependencies != nil {
-		t.Fatalf("newProductionHandler() = (%v, %v, %v), want configuration error", handler, closeDependencies, err)
+		t.Fatalf("newProductionHandler() handler_nil=%v close_nil=%v error=%v, want configuration error",
+			handler == nil, closeDependencies == nil, err)
 	}
 }
 
@@ -34,7 +35,8 @@ func TestProductionRequiresIdentityConfiguration(t *testing.T) {
 
 	handler, closeDependencies, err := newProductionHandler(context.Background())
 	if err == nil || handler != nil || closeDependencies != nil {
-		t.Fatalf("newProductionHandler() = (%v, %v, %v), want production identity error", handler, closeDependencies, err)
+		t.Fatalf("newProductionHandler() handler_nil=%v close_nil=%v error=%v, want production identity error",
+			handler == nil, closeDependencies == nil, err)
 	}
 }
 

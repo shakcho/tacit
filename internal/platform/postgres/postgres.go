@@ -24,6 +24,7 @@ type Config struct {
 type Store struct {
 	pool      *pgxpool.Pool
 	closeOnce sync.Once
+	now       func() time.Time
 }
 
 func Open(ctx context.Context, config Config) (*Store, error) {
@@ -56,7 +57,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
 	}
-	store := &Store{pool: pool}
+	store := &Store{pool: pool, now: time.Now}
 	pingContext, cancel := context.WithTimeout(ctx, config.PingTimeout)
 	defer cancel()
 	if err := pool.Ping(pingContext); err != nil {
@@ -68,6 +69,13 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (store *Store) timeNow() time.Time {
+	if store != nil && store.now != nil {
+		return store.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (store *Store) Close() {
