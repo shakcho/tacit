@@ -6,7 +6,7 @@ cd "$repo_root"
 
 node scripts/check-boundaries.mjs
 node scripts/check-database-budget.mjs
-node --test scripts/database-budget.test.mjs
+node --test scripts/*.test.mjs
 
 unformatted="$(gofmt -l cmd internal)"
 if [[ -n "$unformatted" ]]; then
@@ -16,7 +16,7 @@ if [[ -n "$unformatted" ]]; then
 fi
 
 go vet ./...
-go test ./...
+go test -race ./...
 ./scripts/check-generated.sh
 pnpm --recursive lint
 pnpm --recursive typecheck

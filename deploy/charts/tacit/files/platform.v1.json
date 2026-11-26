@@ -57,7 +57,7 @@
     "ingressClass": "traefik",
     "ingressPeer": { "namespace": "traefik", "labels": { "app.kubernetes.io/name": "traefik" } },
     "dnsPeer": { "namespace": "kube-system", "labels": { "k8s-app": "kube-dns" } },
-    "webExactPaths": ["/", "/favicon.ico", "/icon.svg", "/verifiedsignup", "/app-login"],
+    "webExactPaths": ["/", "/favicon.ico", "/icon.svg", "/verifiedemail", "/verifiedsignin", "/verifiedsignup", "/app-login"],
     "webPrefixPaths": ["/_next", "/api", "/auth", "/design-system", "/help", "/highlights", "/meeting", "/meetings", "/playlists", "/profile", "/projects", "/search", "/share"],
     "webhookPath": "/webhooks/workos",
     "edges": {

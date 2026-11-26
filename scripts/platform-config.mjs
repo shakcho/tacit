@@ -104,7 +104,7 @@ export function loadBindings(input, registry) {
 export function projectDatabaseBudget(registry, bindings) {
   const { api, migration } = registry.workloads;
   const limits = registry.database;
-  // ResourceQuota counts nonterminal pods, including pods held in deletion.
+  // The object quota keeps charging pods held past their deletion grace.
   const admittedAPIPods = api.scale.admittedPods;
   const apiClients = admittedAPIPods * api.database.poolPerPod;
   const direct = {

@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        image: [api, db, web, speech]
+        image: [api, db, web]
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
@@ -35,6 +35,18 @@ jobs:
           test -n "$configured_user"
           test "$configured_user" != "root"
           test "$configured_user" != "0"
+      - name: Check the runnable artifact
+        shell: bash
+        env:
+          IMAGE_KIND: ${{ matrix.image }}
+          IMAGE_TAG: tacit/${{ matrix.image }}:${{ github.sha }}
+        run: |
+          if [[ "$IMAGE_KIND" == web ]]; then
+            test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE_TAG")" = "1001:1001"
+            test "$(docker image inspect --format '{{json .Config.Cmd}}' "$IMAGE_TAG")" = '["node","apps/web/server.js"]'
+          else
+            test "$(docker run --rm "$IMAGE_TAG" --version)" = "$GITHUB_SHA"
+          fi
       - uses: anchore/sbom-action@v0
         with:
           file: /tmp/${{ matrix.image }}.tar

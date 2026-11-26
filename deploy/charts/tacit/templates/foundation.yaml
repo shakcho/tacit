@@ -9,7 +9,7 @@
 {{- $pods := $workload.admittedPods }}
 {{- if eq $workload.kind "deployment" }}{{- $pods = $workload.scale.admittedPods }}{{- end }}
 {{- $resources := $workload.resources }}
-{{- $quota := dict "pods" (toString $pods)
+{{- $quota := dict "pods" (toString $pods) "count/pods" (toString $pods)
     "requests.cpu" (printf "%dm" (mul $pods $resources.requestCPU))
     "requests.memory" (printf "%dMi" (mul $pods $resources.requestMemory))
     "limits.cpu" (printf "%dm" (mul $pods $resources.limitCPU))

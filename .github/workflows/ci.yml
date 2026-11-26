@@ -145,5 +145,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26.13.1
       - uses: azure/setup-helm@v4
-      - run: helm lint deploy/charts/tacit
+        with:
+          version: v3.19.0
+      - run: node --test scripts/platform-render.test.mjs
+        env:
+          TACIT_REQUIRE_HELM: "1"
+      - run: node scripts/platform.mjs render --file deploy/platform/example.json > /tmp/tacit-platform-example.yaml
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tacit-platform-example-manifests
+          path: /tmp/tacit-platform-example.yaml
