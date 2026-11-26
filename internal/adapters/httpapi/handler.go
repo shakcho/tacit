@@ -7,10 +7,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/shakcho/tacit/internal/access"
 	"github.com/shakcho/tacit/internal/platform/process"
+	"github.com/shakcho/tacit/internal/runtime/realtime"
 	"github.com/shakcho/tacit/internal/runtime/shellsample"
 )
 
@@ -26,6 +28,7 @@ type Handler struct {
 	samples         shellsample.Samples
 	sessionDenier   access.SessionDenier
 	webhookVerifier identityWebhookVerifier
+	realtime        *realtime.Service
 	mux             *http.ServeMux
 }
 
@@ -51,6 +54,10 @@ func WithIdentity(dependencies IdentityDependencies) Option {
 	}
 }
 
+func WithRealtime(service *realtime.Service) Option {
+	return func(handler *Handler) { handler.realtime = service }
+}
+
 func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 	handler := &Handler{samples: samples, mux: http.NewServeMux()}
 	for _, option := range options {
@@ -58,6 +65,7 @@ func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 	}
 	handler.mux.HandleFunc("GET /openapi.yaml", handler.serveSpecification)
 	handler.mux.HandleFunc("GET /v1/auth/session", handler.getAuthenticationSession)
+	handler.mux.HandleFunc("GET /v1/events", handler.getEvents)
 	handler.mux.HandleFunc("POST /internal/auth/session-denials", handler.denyAuthenticationSession)
 	handler.mux.HandleFunc("POST /webhooks/workos", handler.receiveWorkOSWebhook)
 	handler.mux.HandleFunc("POST /v1/shell-samples", handler.createShellSample)
@@ -68,6 +76,12 @@ func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 
 func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	handler.mux.ServeHTTP(response, request)
+}
+
+func (handler *Handler) Drain() {
+	if handler.realtime != nil {
+		handler.realtime.Drain()
+	}
 }
 
 type createShellSampleInput struct {
@@ -179,6 +193,8 @@ type authenticationSessionResponse struct {
 	OrganizationID string                        `json:"organizationId"`
 	Roles          []string                      `json:"roles"`
 	UserID         string                        `json:"userId"`
+	Cursor         string                        `json:"cursor"`
+	Revision       string                        `json:"revision"`
 }
 
 type authorizationSnapshotResponse struct {
@@ -200,6 +216,20 @@ func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, r
 		writeProblem(response, request, *problem)
 		return
 	}
+	if handler.realtime == nil {
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	snapshot, cursor, err := handler.realtime.SessionSnapshot(request.Context(), principal)
+	if errors.Is(err, access.ErrNotAdmitted) {
+		writeProblem(response, request, newProblem(http.StatusForbidden, "NOT_ADMITTED"))
+		return
+	}
+	if err != nil {
+		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE"))
+		return
+	}
+	principal = snapshot.Principal
 	roleValues := principal.Roles().Values()
 	roles := make([]string, 0, len(roleValues))
 	for _, role := range roleValues {
@@ -211,6 +241,8 @@ func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, r
 		OrganizationID: principal.OrganizationID().String(),
 		Roles:          roles,
 		UserID:         principal.UserID().String(),
+		Cursor:         cursor,
+		Revision:       strconv.FormatInt(snapshot.Point.Position, 10),
 	})
 }
 
@@ -450,6 +482,10 @@ func problemText(code string) (string, string) {
 		return "Identity service unavailable", "Identity checks cannot be completed safely."
 	case "INVALID_ORGANIZATION":
 		return "Invalid organization", "Provide one canonical local organization ID."
+	case "INVALID_EVENT_REQUEST":
+		return "Invalid event request", "The stream scope comes from the authenticated session."
+	case "RESYNC_REQUIRED":
+		return "Session snapshot required", "Fetch the current authentication session and reconnect with its cursor."
 	case "INVALID_WEBHOOK":
 		return "Invalid webhook", "The WorkOS webhook could not be verified."
 	case "WEBHOOK_CONFLICT":

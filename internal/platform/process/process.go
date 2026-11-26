@@ -120,6 +120,9 @@ func serve(ctx context.Context, cfg Config, listener net.Listener, factory Handl
 	drainContext, cancel := context.WithTimeout(context.Background(), cfg.DrainTimeout)
 	defer cancel()
 	life.drain()
+	if application, ok := application.(interface{ Drain() }); ok {
+		application.Drain()
+	}
 	httpDrained := make(chan error, 1)
 	go func() {
 		httpDrained <- server.Shutdown(drainContext)

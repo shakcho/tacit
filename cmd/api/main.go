@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/shakcho/tacit/internal/platform/memory"
 	"github.com/shakcho/tacit/internal/platform/postgres"
 	"github.com/shakcho/tacit/internal/platform/process"
+	"github.com/shakcho/tacit/internal/runtime/realtime"
 )
 
 var version = "dev"
@@ -36,7 +38,7 @@ func main() {
 	defer stop()
 	handler, closeDependencies, err := newProductionHandler(shutdownContext)
 	if err != nil {
-		logger.Error("identity initialization failed", "role", "api")
+		logger.Error("API initialization failed", "role", "api")
 		os.Exit(1)
 	}
 	defer closeDependencies()
@@ -90,8 +92,17 @@ func newProductionHandler(ctx context.Context) (http.Handler, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("identity namespace is invalid")
 	}
+	secret := []byte(os.Getenv("TACIT_REALTIME_CURSOR_KEY"))
+	if len(secret) == 0 && os.Getenv("TACIT_ENV") != "production" {
+		localKey := sha256.Sum256([]byte("tacit.dev.realtime.key\x00" + values["webhook"]))
+		secret = localKey[:]
+	}
+	codec, err := realtime.NewCursorCodec(secret)
+	if err != nil {
+		return nil, nil, err
+	}
 	store, err := postgres.Open(ctx, postgres.Config{
-		URL: values["database"], ApplicationName: "tacit-api", MaxConnections: 8, MinConnections: 1,
+		URL: values["database"], ApplicationName: "tacit-api", MaxConnections: 4, MinConnections: 1,
 		ConnectTimeout: 5 * time.Second, HealthCheckPeriod: 30 * time.Second, PingTimeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -114,10 +125,19 @@ func newProductionHandler(ctx context.Context) (http.Handler, func(), error) {
 	}
 	authenticator := access.NewAuthenticationService(verifier, store)
 	sessionDenier := access.NewSessionDenialService(verifier, store)
+	registry := realtime.NewRegistry(64)
+	stopListening, err := store.ListenForRealtime(ctx, os.Getenv("TACIT_REALTIME_LISTEN_DATABASE_URL"), registry)
+	if err != nil {
+		closeStore()
+		return nil, nil, err
+	}
 	handler := httpapi.NewHandler(memory.NewShellSamples(memory.Limits{
 		Samples: 256, IdempotencyEntries: 512,
 	}), httpapi.WithIdentity(httpapi.IdentityDependencies{
 		Authenticator: authenticator, Lifecycle: store, SessionDenier: sessionDenier, WebhookVerifier: webhookVerifier,
-	}))
-	return handler, closeStore, nil
+	}), httpapi.WithRealtime(realtime.NewService(postgres.NewRealtimeFeed(store), codec, registry)))
+	return handler, func() {
+		stopListening()
+		closeStore()
+	}, nil
 }

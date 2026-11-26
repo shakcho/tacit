@@ -82,6 +82,7 @@ func identityHandler(t *testing.T, authenticator *fakeAuthenticator, denier *fak
 			SessionDenier:   denier,
 			WebhookVerifier: fakeWebhookVerifier{event: lifecycleEvent(t)},
 		}),
+		httpapi.WithRealtime(newEventService(t, &eventFeed{}, 4).service),
 	)
 }
 
@@ -264,6 +265,8 @@ func TestAuthenticationSessionMapsFailuresAndReturnsOnlyLocalIdentity(t *testing
 		!bytes.Contains(response.Body.Bytes(), []byte(`"organizationId":"org_0123456789abcdef0123456789abcdef"`)) ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"policyRevision":"tacit-authorization-v1"`)) ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"action":"manage_members","allowed":true`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"cursor":"v1.`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"revision":"0"`)) ||
 		!authenticator.target.UsesTokenOrganization() {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
