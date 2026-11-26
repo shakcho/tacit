@@ -19,3 +19,5 @@ OpenAPI owns the product HTTP contract, and Orval generates the Next.js Fetch/Ta
 The web application may use CASL for presentation, but Go authorization is authoritative for every read, command, event stream, job result, search result and media grant. See [`authorization.md`](authorization.md) for the policy, authority, and transaction boundaries.
 
 See `boundaries.json` for the machine-enforced import rules and `ownership.md` for review ownership.
+
+The [managed platform](platform.md) describes the runnable web, API, and migration workloads and the conditions for worker and standby activation.

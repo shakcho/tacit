@@ -22,7 +22,7 @@ An idempotency record is identified by organization, operation scope, and client
 
 `internal/platform/postgres/migrations` contains immutable forward migrations. The migration command uses a direct PostgreSQL connection, obtains one advisory transaction lock, and records each version and SHA-256 checksum in `tacit_schema_migrations`.
 
-The API does not run migrations during startup. A deployment runs `tacit-db migrate` before it starts a binary that requires the new schema. The binary rejects a schema version outside its supported range.
+The API does not run migrations during startup. A deployment runs `tacit-db migrate` before it starts a binary. The current API requires schema version 4 exactly.
 
 Version 2 adds managed-identity organization mappings, admission state, session denials, invitation grants, and the lifecycle event inbox. The integration suite creates a populated version-1 schema in an isolated PostgreSQL schema, applies migration 2, and checks that the existing user, organization, membership, role, and identity alias remain intact.
 
@@ -36,12 +36,12 @@ Supabase documents daily backups on paid plans and optional point-in-time recove
 
 ## Connection budget
 
-[`deploy/database/connections.json`](../../deploy/database/connections.json) records two separate limits.
+[`files/platform.v1.json`](../../deploy/charts/tacit/files/platform.v1.json) defines database use per workload and project capacity. The platform command projects the budget for each environment.
 
-- PostgreSQL backend connections include the provider pool, direct operations, and the provider reserve.
-- Pooler client connections include every process pool at its replica ceiling and rollout surge.
+- PostgreSQL allocates backend connections to each unique pooler, database, login, and mode. The budget also includes direct LISTEN and operational connections and the provider reserve.
+- Pooler clients include all processes admitted under the namespace pod quota plus declared external allocations.
 
-`scripts/check-database-budget.mjs` rejects a budget that reaches either limit. TAC-011 must use the same replica and surge ceilings in Kubernetes. Until TAC-011 adds those controls, the file proves the arithmetic and per-process caps only.
+`node scripts/check-database-budget.mjs` verifies the example. `node scripts/platform.mjs validate --file <bindings>` verifies an environment. See [managed platform](platform.md) for rollout quotas and provider enforcement.
 
 ## Verification
 

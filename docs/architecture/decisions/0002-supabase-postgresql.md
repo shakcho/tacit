@@ -16,13 +16,13 @@ Keep the application schema, authorization, migrations, encryption policy, capac
 
 Start production on a paid project with seven days of point-in-time recovery. Use an initial recovery point objective of five minutes and a recovery time objective of four hours. Run a logical restore drill before production, then at least monthly. Store the drill timestamp, duration, schema version, and data checksum outside the restored project.
 
-The initial connection budget assumes a Supabase Micro database with 60 PostgreSQL connections. It reserves 20 connections for Supabase and operators, limits the shared pooler to 15 backend connections, and permits four concurrent direct operational connections. A plan or pooler change must update and pass the committed budget before deployment.
+The initial connection budget assumes a Supabase Micro database with 60 PostgreSQL connections and 20 provider-reserved connections. The [managed platform registry](../platform.md#capacity-during-rollout) derives direct connections from role quotas and validates backend allocations per pooler tuple. Confirm the actual plan and pooler settings before deployment.
 
 ## Consequences
 
 - The Next.js application continues to call the Go OpenAPI service.
 - Tacit does not use Supabase Auth, Realtime, or generated Data APIs for product tables.
-- Production needs two database secrets: a pooled application URL and a direct operational URL.
+- Production uses a pooled application URL, a distinct direct LISTEN URL, and a separate direct DDL URL.
 - The connection budget includes provider backend pools, direct operations, reserved capacity, process pools, replica ceilings, and rollout surge.
 - A provider backup does not close the recovery acceptance criterion. Tacit records restore evidence from an isolated environment.
 
