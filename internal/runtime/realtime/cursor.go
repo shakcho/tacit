@@ -12,7 +12,6 @@ import (
 const cursorVersion = "v1."
 
 // CursorCodec signs event IDs for exactly one authenticated user and organization.
-// The key digest identifies the signing generation and changes when the key rotates.
 type CursorCodec struct {
 	key   [sha256.Size]byte
 	keyID [8]byte

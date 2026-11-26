@@ -239,7 +239,6 @@ func (stream *Stream) terminate(send func(Frame) error, err error) error {
 		}
 		return err
 	default:
-		// No cursor advances when the database cannot prove continuity.
 		return send(Frame{Kind: Resync})
 	}
 }

@@ -184,7 +184,6 @@ func TestEventsStreamRecoversLostWakesAndStopsOnRevocation(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	other, _ := access.ParseUserID("usr_00000000000000000000000000000002")
 	feed.append(other)
-	// No broker notification. The independent repair scan reaches the committed event.
 	if frame := readEvent(t, reader); !strings.Contains(frame, "event: checkpoint\ndata: {}") || !strings.Contains(frame, "id: v1.") {
 		t.Fatalf("checkpoint = %q", frame)
 	}
@@ -312,8 +311,6 @@ func TestSlowEventPeerReleasesItsSlot(t *testing.T) {
 	}
 	events.registry.Notify(member.OrganizationID())
 
-	// The first client holds its body open without reading. The in-memory socket
-	// has no peer-side queue, so each frame misses its bounded flush deadline.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		next, err := client.Do(eventRequest(t, requestURL, cursor))

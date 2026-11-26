@@ -10,7 +10,7 @@ import { publicEnvironment } from "@/env/public";
 
 type SubscriptionState =
   | { kind: "stream"; cursor: RealtimeCursor }
-  | { kind: "refresh"; cursor: RealtimeCursor; revision: SessionRevision }
+  | { kind: "refetchPending"; cursor: RealtimeCursor; revision: SessionRevision }
   | { kind: "snapshot" };
 
 type AccessEnd = "revoked" | "scope_changed";
@@ -50,7 +50,7 @@ export async function followSession(subscription: SessionSubscription): Promise<
         retryDelay = initialRetryDelay;
         continue;
       }
-      if (state.kind === "refresh") {
+      if (state.kind === "refetchPending") {
         await refreshSession(subscription, state.revision);
         state = { kind: "stream", cursor: state.cursor };
         retryDelay = initialRetryDelay;
@@ -77,8 +77,7 @@ export async function followSession(subscription: SessionSubscription): Promise<
               break;
             case "invalidate": {
               if (frame.userId !== initial.userId) throw new StreamProtocolError("Event resource is outside the session");
-              // Keep the refetch obligation if the canonical request fails after this frame.
-              state = { kind: "refresh", cursor: frame.cursor, revision: frame.revision };
+              state = { kind: "refetchPending", cursor: frame.cursor, revision: frame.revision };
               const canonical = client.getQueryData<AuthenticationSession | null>(sessionKey);
               if (!canonical || BigInt(canonical.revision) < BigInt(frame.revision)) {
                 await refreshSession(subscription, frame.revision);
