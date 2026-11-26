@@ -16,7 +16,7 @@
       "resources": { "requestCPU": 100, "requestMemory": 128, "limitCPU": 500, "limitMemory": 512, "scratch": 128 },
       "scale": { "min": 2, "max": 3, "surge": 1, "admittedPods": 4, "cpuTarget": 65, "pdbMin": 1 },
       "lifecycle": { "live": "/healthz", "ready": "/readyz", "graceSeconds": 30 },
-      "secretKeys": { "WORKOS_API_KEY": "workos-api-key", "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" },
+      "secretKeys": { "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" },
       "database": { "kind": "none" }
     },
     "api": {

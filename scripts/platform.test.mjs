@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { example, loadBindings, loadRegistry, projectDatabaseBudget, readJSON, stableJSON } from "./platform-config.mjs";
+import {
+  assertSupportedSchema, example, loadBindings, loadRegistry, projectDatabaseBudget, readJSON, stableJSON,
+} from "./platform-config.mjs";
 import {
   changeRelease, commandFor, parseCLI, parseManifests, requireCompatibleRevision, withEnvironmentLock,
 } from "./platform.mjs";
@@ -12,6 +14,8 @@ const registry = loadRegistry();
 const bindings = loadBindings(readJSON(example), registry);
 
 test("the registry is closed, versioned, and makes contracts non-runnable", () => {
+  assert.throws(() => assertSupportedSchema({ type: "object", maxProperties: 0 }, "test schema"),
+    /unsupported schema keyword maxProperties/);
   const contracts = Object.keys(registry.workloads).filter((role) => registry.workloads[role].kind === "contract");
   assert.deepEqual(contracts, ["dispatch", "worker-ingress", "connectors", "capture", "media", "speech", "llm", "delivery"]);
   assert.deepEqual(Object.values(registry.futureCapacity), [0, 0, 0, 0]);
@@ -131,7 +135,6 @@ test("an interrupted lock owner cannot continue or release another owner's lock"
   assert.deepEqual(calls, ["acquire deployment lock", "read deployment lock", "read deployment lock"]);
 });
 
-// Use a process boundary fixture to verify ordering and failure behavior without mutating a kube context.
 function releaseFixture({ installed = false, previousSchema = 4, fail } = {}) {
   const calls = [];
   let lockOwner;
@@ -185,6 +188,8 @@ test("deploy installs foundation, waits for migration, deploys app, and returns 
   const receipt = await changeRelease({ ...target, action: "deploy" }, registry, bindings, fixture.run,
     ({ revision }) => smokes.push(revision));
   assert.deepEqual(mutations(fixture.calls), ["install foundation", "apply migration job", "remove completed migration job", "deploy application"]);
+  assert.ok(fixture.calls.findIndex(({ label }) => label === "ensure deployment namespace")
+    < fixture.calls.findIndex(({ label }) => label === "acquire deployment lock"));
   assert.deepEqual(smokes, [bindings.revision]);
   assert.match(receipt.foundationHash, /^[0-9a-f]{64}$/u);
   assert.equal(receipt.schemaVersion, 4);

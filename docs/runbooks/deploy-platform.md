@@ -7,7 +7,7 @@
 3. Build the `web`, `api`, and `db` Dockerfiles from the same reviewed source revision. Publish them to a registry the nodes can pull from. Record the three registry digests. Container CI checks the three artifacts and generates their SBOMs.
 4. Copy [example.json](../../deploy/platform/example.json) to an environment bindings file. Replace the environment name, source revision, image digests, TLS hostnames, Secret names, and egress addresses. Resolve the actual WorkOS, SQL pooler, and direct database addresses. Keep egress changes and DNS changes coordinated.
 5. Confirm the provider reserve, project size, per-tuple backend limits, and aggregate client limits at the database and pooler. Include other clients sharing the project and overlapping credential generations. Bind the API transaction endpoint on port 6543 and the direct endpoints on port 5432.
-6. Use a release runner restricted to this environment. Create the `tacit-<environment>-system` namespace for Helm release records and the deployment lock. Give workloads no access to that namespace or its credentials.
+6. Use a release runner restricted to this environment. The deployment command creates the `tacit-<environment>-system` namespace for Helm release records and the deployment lock. Give workloads no access to that namespace or its credentials.
 
 Use Node, Helm, and kubectl from the trusted toolchain. Keep the bindings file free of credential values.
 
@@ -16,7 +16,6 @@ tacit_environment=staging
 tacit_context=tacit-staging-us
 tacit_bindings=/path/to/staging.json
 
-kubectl --context "$tacit_context" create namespace "tacit-$tacit_environment-system"
 node scripts/platform.mjs validate --file "$tacit_bindings"
 node scripts/platform.mjs render --file "$tacit_bindings"
 node scripts/platform.mjs deploy --foundation-only --file "$tacit_bindings" \
@@ -27,7 +26,7 @@ Populate the Secrets through the environment's secret manager after the foundati
 
 | Namespace suffix | Secret data |
 | --- | --- |
-| `web` | WorkOS API key, client ID, issuer, and cookie password. Put the web certificate and key in the named web TLS Secret. |
+| `web` | WorkOS client ID, issuer, and cookie password. Put the web certificate and key in the named web TLS Secret. Public-client sign-in does not require an API key; add one only when a reviewed management feature introduces its own scoped binding. |
 | `api` | Dedicated transaction URL, separate direct LISTEN URL, shared cursor key of at least 32 bytes, WorkOS namespace, client ID, issuer, JWKS URL, and webhook secret. Put the webhook certificate and key in the named API TLS Secret. |
 | `migration` | One dedicated direct DDL connection URL for the application database. |
 

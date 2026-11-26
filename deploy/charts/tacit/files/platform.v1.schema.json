@@ -117,7 +117,7 @@
           "type": "object", "additionalProperties": false, "required": ["live", "ready", "graceSeconds"],
           "properties": { "live": { "const": "/healthz" }, "ready": { "const": "/readyz" }, "graceSeconds": { "$ref": "#/definitions/positive" } }
         },
-        "secretKeys": { "const": { "WORKOS_API_KEY": "workos-api-key", "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" } },
+        "secretKeys": { "const": { "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" } },
         "database": { "const": { "kind": "none" } }
       }
     },

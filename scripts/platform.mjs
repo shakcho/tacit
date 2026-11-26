@@ -235,7 +235,17 @@ export async function changeRelease(options, registry, bindings, run = execute, 
   const app = renderPhase(bindings, "application", run);
   const migration = options.action === "deploy" && !options["foundation-only"] ? renderPhase(bindings, "migration", run) : undefined;
   const foundationHash = manifestDigest(foundation);
-  kube("check deployment namespace", ["get", "namespace", system, "-o", "name"]);
+  run("kubectl", ["--context", options.context, "apply", "--server-side", "--field-manager=tacit-platform", "-f", "-"], {
+    input: stableJSON({
+      apiVersion: "v1",
+      kind: "Namespace",
+      metadata: {
+        name: system,
+        labels: { "tacit.dev/environment": bindings.environment, "tacit.dev/role": "system" },
+      },
+    }),
+    label: "ensure deployment namespace",
+  });
 
   return withEnvironmentLock(kube, async (assertOwner) => {
     const states = releaseStates(helm);

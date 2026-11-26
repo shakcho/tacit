@@ -18,7 +18,37 @@ export function readJSON(path) {
 const registrySchema = readJSON(new URL("files/platform.v1.schema.json", chart));
 const valuesSchema = readJSON(new URL("values.schema.json", chart));
 
-// The packaged schemas share this subset of Draft 7 with Helm.
+const supportedSchemaKeywords = new Set([
+  "$ref", "$schema", "additionalProperties", "const", "definitions", "enum", "items", "maxItems",
+  "maximum", "maxLength", "minItems", "minimum", "minLength", "minProperties", "pattern", "properties",
+  "required", "type", "uniqueItems",
+]);
+
+export function assertSupportedSchema(schema, path) {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
+    throw new Error(`${path} must be a schema object`);
+  }
+  for (const keyword of Object.keys(schema)) {
+    if (!supportedSchemaKeywords.has(keyword)) throw new Error(`${path} uses unsupported schema keyword ${keyword}`);
+  }
+  for (const [name, child] of Object.entries(schema.properties ?? {})) {
+    assertSupportedSchema(child, `${path}.properties.${name}`);
+  }
+  for (const [name, child] of Object.entries(schema.definitions ?? {})) {
+    assertSupportedSchema(child, `${path}.definitions.${name}`);
+  }
+  if (schema.items !== undefined) assertSupportedSchema(schema.items, `${path}.items`);
+  if (schema.additionalProperties !== undefined && typeof schema.additionalProperties === "object") {
+    assertSupportedSchema(schema.additionalProperties, `${path}.additionalProperties`);
+  }
+}
+
+assertSupportedSchema(registrySchema, "registry schema");
+assertSupportedSchema(valuesSchema, "bindings schema");
+if (registrySchema.properties.schemaVersion.const !== valuesSchema.properties.schemaVersion.const) {
+  throw new Error("registry and bindings schemas require different database versions");
+}
+
 function checkShape(value, schema, root, path) {
   function require(condition, expectation) {
     if (!condition) throw new Error(`${path} ${expectation}`);
@@ -86,7 +116,6 @@ export function loadRegistry(input = readJSON(new URL("files/platform.v1.json", 
 
 export function loadBindings(input, registry) {
   checkShape(input, valuesSchema, valuesSchema, "bindings");
-  if (input.schemaVersion !== registry.schemaVersion) throw new Error("schema-version mismatch");
   if (input.ingress.webHost === input.ingress.webhookHost) throw new Error("webhook ingress needs a dedicated hostname");
   for (const [edge, cidrs] of Object.entries(input.egress)) {
     for (const entry of cidrs) {

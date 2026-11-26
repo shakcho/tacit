@@ -38,7 +38,7 @@ Supabase documents daily backups on paid plans and optional point-in-time recove
 
 [`files/platform.v1.json`](../../deploy/charts/tacit/files/platform.v1.json) defines database use per workload and project capacity. The platform command projects the budget for each environment.
 
-- PostgreSQL allocates backend connections to each unique pooler, database, login, and mode. The budget also includes direct LISTEN and operational connections and the provider reserve.
+- Supavisor allocates a backend pool to each unique pooler, database, login, and mode. The PostgreSQL budget also includes direct LISTEN and operational connections and the provider reserve.
 - Pooler clients include all processes admitted under the namespace pod quota plus declared external allocations.
 
 `node scripts/check-database-budget.mjs` verifies the example. `node scripts/platform.mjs validate --file <bindings>` verifies an environment. See [managed platform](platform.md) for rollout quotas and provider enforcement.
