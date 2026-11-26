@@ -1,0 +1,54 @@
+x-api: &api
+  build:
+    context: ../..
+    dockerfile: build/package/api.Dockerfile
+  environment:
+    TACIT_ENV: production
+    TACIT_API_ADDRESS: 0.0.0.0:8080
+    TACIT_DATABASE_URL: postgres://tacit_fixture:tacit_fixture@postgres:5432/tacit_fixture?sslmode=disable
+    TACIT_IDENTITY_NAMESPACE: ${TACIT_IDENTITY_NAMESPACE:-}
+    TACIT_WORKOS_ISSUER: ${TACIT_WORKOS_ISSUER:-}
+    TACIT_WORKOS_CLIENT_ID: ${TACIT_WORKOS_CLIENT_ID:-}
+    TACIT_WORKOS_JWKS_URL: ${TACIT_WORKOS_JWKS_URL:-}
+    TACIT_WORKOS_WEBHOOK_SECRET: ${TACIT_WORKOS_WEBHOOK_SECRET:-}
+    TACIT_REALTIME_CURSOR_KEY: ${TACIT_REALTIME_CURSOR_KEY:-}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  stop_grace_period: 12s
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_USER: tacit_fixture
+      POSTGRES_PASSWORD: tacit_fixture
+      POSTGRES_DB: tacit_fixture
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "tacit_fixture", "-d", "tacit_fixture"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    ports:
+      - "127.0.0.1:${TACIT_FIXTURE_POSTGRES_PORT:-54331}:5432"
+  migrate:
+    build:
+      context: ../..
+      dockerfile: build/package/db.Dockerfile
+    command: ["migrate"]
+    environment:
+      TACIT_DATABASE_DIRECT_URL: postgres://tacit_fixture:tacit_fixture@postgres:5432/tacit_fixture?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api-one: *api
+  api-two: *api
+  proxy:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:${TACIT_FIXTURE_PROXY_PORT:-18080}:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api-one
+      - api-two

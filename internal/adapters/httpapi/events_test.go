@@ -291,3 +291,43 @@ func TestEventDrainClosesStreamsAndRejectsNewAttachments(t *testing.T) {
 		t.Fatalf("attachment during drain = %d", response.StatusCode)
 	}
 }
+
+func TestSlowEventPeerReleasesItsSlot(t *testing.T) {
+	member := principal(t)
+	feed := &eventFeed{}
+	events := newEventService(t, feed, 1)
+	handler := httpapi.NewHandler(nil, httpapi.WithIdentity(httpapi.IdentityDependencies{
+		Authenticator: &fakeAuthenticator{principal: member},
+	}), httpapi.WithRealtime(events.service))
+	client, origin := eventHTTPServer(t, handler, time.Second)
+	cursor := events.codec.Encode(member, initialPoint.Event)
+	requestURL := origin + "/v1/events"
+	response, err := client.Do(eventRequest(t, requestURL, cursor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	for range 128 {
+		feed.append(member.UserID())
+	}
+	events.registry.Notify(member.OrganizationID())
+
+	// The first client holds its body open without reading. The in-memory socket
+	// has no peer-side queue, so each frame misses its bounded flush deadline.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		next, err := client.Do(eventRequest(t, requestURL, cursor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.Body.Close()
+		if next.StatusCode == http.StatusOK {
+			return
+		}
+		if next.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("reattachment returned %d", next.StatusCode)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("slow peer held its stream slot past the write deadline")
+}

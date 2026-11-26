@@ -72,6 +72,8 @@ func writeEventFailure(response http.ResponseWriter, request *http.Request, err 
 		writeProblem(response, request, newProblem(http.StatusConflict, "RESYNC_REQUIRED"))
 	case errors.Is(err, access.ErrNotAdmitted):
 		writeProblem(response, request, newProblem(http.StatusForbidden, "NOT_ADMITTED"))
+	case errors.Is(err, access.ErrUnauthenticated):
+		writeProblem(response, request, newProblem(http.StatusUnauthorized, "UNAUTHENTICATED"))
 	default:
 		response.Header().Set("Retry-After", "2")
 		writeProblem(response, request, newProblem(http.StatusServiceUnavailable, "UNAVAILABLE"))

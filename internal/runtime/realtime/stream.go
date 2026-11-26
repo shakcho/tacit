@@ -230,11 +230,14 @@ func (stream *Stream) terminate(send func(Frame) error, err error) error {
 	case errors.Is(err, access.ErrNotAdmitted):
 		return send(Frame{Kind: AccessRevoked})
 	case errors.Is(err, ErrResync):
-		if err := stream.authorized(send, Frame{Kind: Resync}); errors.Is(err, access.ErrNotAdmitted) {
+		err := stream.authorized(send, Frame{Kind: Resync})
+		if errors.Is(err, access.ErrNotAdmitted) {
 			return send(Frame{Kind: AccessRevoked})
-		} else {
-			return err
 		}
+		if errors.Is(err, access.ErrUnauthenticated) {
+			return send(Frame{Kind: Resync})
+		}
+		return err
 	default:
 		// No cursor advances when the database cannot prove continuity.
 		return send(Frame{Kind: Resync})

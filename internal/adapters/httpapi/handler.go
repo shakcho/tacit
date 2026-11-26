@@ -221,6 +221,10 @@ func (handler *Handler) getAuthenticationSession(response http.ResponseWriter, r
 		return
 	}
 	snapshot, cursor, err := handler.realtime.SessionSnapshot(request.Context(), principal)
+	if errors.Is(err, access.ErrUnauthenticated) {
+		writeProblem(response, request, newProblem(http.StatusUnauthorized, "UNAUTHENTICATED"))
+		return
+	}
 	if errors.Is(err, access.ErrNotAdmitted) {
 		writeProblem(response, request, newProblem(http.StatusForbidden, "NOT_ADMITTED"))
 		return

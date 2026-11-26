@@ -268,17 +268,22 @@ func (feed *RealtimeFeed) Authorize(ctx context.Context, principal access.LocalP
 
 func currentSession(ctx context.Context, query rowScannerQueryer, principal access.LocalPrincipal) (access.LocalPrincipal, error) {
 	identity, ok := principal.RevalidationIdentity()
-	if !ok || !principal.ValidAt(time.Now()) {
+	if !ok {
 		return access.LocalPrincipal{}, access.ErrNotAdmitted
+	}
+	if !principal.ValidAt(time.Now()) {
+		return access.LocalPrincipal{}, access.ErrUnauthenticated
 	}
 	admission, found, err := resolveIdentity(ctx, query, identity, access.ExactOrganization(principal.OrganizationID()))
 	if err != nil {
 		return access.LocalPrincipal{}, err
 	}
 	fresh, same := principal.Revalidated(admission)
-	if !found || !same || !fresh.ValidAt(time.Now()) ||
-		!access.AllowsAuthenticationSession(fresh, access.ActionRead, principal.UserID()) {
+	if !found || !same || !access.AllowsAuthenticationSession(fresh, access.ActionRead, principal.UserID()) {
 		return access.LocalPrincipal{}, access.ErrNotAdmitted
+	}
+	if !fresh.ValidAt(time.Now()) {
+		return access.LocalPrincipal{}, access.ErrUnauthenticated
 	}
 	return fresh, nil
 }

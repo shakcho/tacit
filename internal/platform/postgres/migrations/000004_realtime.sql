@@ -21,9 +21,6 @@ CREATE TABLE tacit_realtime_changes (
     CHECK (resource_id IS NOT DISTINCT FROM audience_user_id)
 );
 
-INSERT INTO tacit_realtime_heads (organization_id)
-SELECT id FROM tacit_organizations;
-
 CREATE FUNCTION tacit_initialize_realtime_head() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     INSERT INTO tacit_realtime_heads (organization_id) VALUES (NEW.id);
@@ -34,3 +31,6 @@ $$;
 CREATE TRIGGER tacit_initialize_realtime_head
     AFTER INSERT ON tacit_organizations
     FOR EACH ROW EXECUTE FUNCTION tacit_initialize_realtime_head();
+
+INSERT INTO tacit_realtime_heads (organization_id)
+SELECT id FROM tacit_organizations;
