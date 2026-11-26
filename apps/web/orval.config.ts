@@ -3,6 +3,7 @@ import { defineConfig } from "orval";
 export default defineConfig({
   tacit: {
     input: {
+      filters: { mode: "exclude", tags: ["Realtime"] },
       target: "../../internal/adapters/httpapi/openapi.yaml",
     },
     output: {

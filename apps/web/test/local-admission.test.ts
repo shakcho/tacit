@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { localAdmission } from "@/auth/local-admission";
 
 const session = {
+  cursor: `v1.${"A".repeat(75)}`,
+  revision: "1",
   authorization: {
     decisions: [
       {

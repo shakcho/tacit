@@ -1,5 +1,7 @@
 const safeMethods = new Set(["GET", "HEAD"]);
 
+export const eventsPath = "/v1/events";
+
 const allowedRoutes = [
   { method: "GET", pattern: /^\/v1\/auth\/session$/u },
   { method: "GET", pattern: /^\/v1\/shell-samples\/smp_[0-9a-f]{32}$/u },
@@ -19,6 +21,7 @@ export function backendPath(segments: readonly string[]): string | null {
 }
 
 export function isAllowedBackendRequest(method: string, path: string): boolean {
+  if (path === eventsPath) return method === "GET";
   return allowedRoutes.some((route) => route.method === method && route.pattern.test(path));
 }
 
@@ -26,28 +29,36 @@ export function isSafeMethod(method: string): boolean {
   return safeMethods.has(method);
 }
 
-export function hasExpectedOrigin(request: Request, expectedOrigin: string): boolean {
-  if (isSafeMethod(request.method)) return true;
+export function hasExpectedOrigin(request: Request, expectedOrigin: string, eventStream = false): boolean {
   const origin = request.headers.get("Origin");
   const fetchSite = request.headers.get("Sec-Fetch-Site");
+  if (eventStream) {
+    return (origin === null || origin === expectedOrigin) && (fetchSite === null || fetchSite === "same-origin");
+  }
+  if (isSafeMethod(request.method)) return true;
   return origin === expectedOrigin && (fetchSite === null || fetchSite === "same-origin");
 }
 
-export function upstreamRequestHeaders(request: Request, accessToken: string): Headers {
+export function upstreamRequestHeaders(request: Request, accessToken: string, eventStream = false): Headers {
   const headers = new Headers({
-    Accept: "application/json, application/problem+json",
+    Accept: eventStream ? "text/event-stream" : "application/json, application/problem+json",
     Authorization: `Bearer ${accessToken}`,
   });
-  for (const name of ["Content-Type", "Idempotency-Key", "X-Request-ID", "X-Tacit-Organization"]) {
+  const allowed = eventStream
+    ? ["Last-Event-ID", "X-Request-ID"]
+    : ["Content-Type", "Idempotency-Key", "X-Request-ID", "X-Tacit-Organization"];
+  for (const name of allowed) {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
   return headers;
 }
 
-export function downstreamResponseHeaders(upstream: Headers): Headers {
+export function downstreamResponseHeaders(upstream: Headers, eventStream = false): Headers {
   const headers = new Headers({ "Cache-Control": "no-store" });
-  for (const name of ["Content-Type", "Location", "Retry-After", "X-Request-ID"]) {
+  const allowed = ["Content-Type", "Location", "Retry-After", "X-Request-ID"];
+  if (eventStream) allowed.push("Cache-Control", "X-Accel-Buffering");
+  for (const name of allowed) {
     const value = upstream.get(name);
     if (value !== null) headers.set(name, value);
   }

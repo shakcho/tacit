@@ -4,12 +4,14 @@ import type { NextRequest } from "next/server";
 import {
   backendPath,
   downstreamResponseHeaders,
+  eventsPath,
   hasExpectedOrigin,
   isAllowedBackendRequest,
   isSafeMethod,
   maximumProxyBodyBytes,
   upstreamRequestHeaders,
 } from "@/auth/api-proxy-policy";
+import { openUpstreamStream } from "@/auth/api-proxy-stream";
 import { getServerEnvironment } from "@/env/server";
 
 type RouteContext = Readonly<{ params: Promise<{ path: string[] }> }>;
@@ -43,14 +45,17 @@ async function forward(request: NextRequest, context: RouteContext): Promise<Res
     return problem(400, "BROWSER_CREDENTIAL_REJECTED", "The web boundary supplies its own API credential.");
   }
 
-  const environment = getServerEnvironment();
-  if (!hasExpectedOrigin(request, environment.webOrigin.origin)) {
-    return problem(403, "CROSS_SITE_REQUEST", "The request origin is not allowed.");
-  }
-
   const path = backendPath((await context.params).path);
   if (path === null || !isAllowedBackendRequest(request.method, path)) {
     return problem(404, "NOT_FOUND", "The requested API operation is not exposed by the web boundary.");
+  }
+  const eventStream = path === eventsPath;
+  const environment = getServerEnvironment();
+  if (!hasExpectedOrigin(request, environment.webOrigin.origin, eventStream)) {
+    return problem(403, "CROSS_SITE_REQUEST", "The request origin is not allowed.");
+  }
+  if (eventStream && (request.nextUrl.search !== "" || request.headers.has("X-Tacit-Organization") || request.body !== null)) {
+    return problem(400, "INVALID_EVENT_REQUEST", "The stream scope comes from the authenticated session.");
   }
 
   const auth = await withAuth();
@@ -68,12 +73,13 @@ async function forward(request: NextRequest, context: RouteContext): Promise<Res
 
   const target = new URL(path, environment.apiOrigin);
   target.search = request.nextUrl.search;
+  const headers = upstreamRequestHeaders(request, auth.accessToken, eventStream);
   let upstream: Response;
   try {
-    upstream = await fetch(target, {
+    upstream = eventStream ? await openUpstreamStream({ target, headers, signal: request.signal }) : await fetch(target, {
       body,
       cache: "no-store",
-      headers: upstreamRequestHeaders(request, auth.accessToken),
+      headers,
       method: request.method,
       redirect: "manual",
       signal: AbortSignal.timeout(15_000),
@@ -82,10 +88,11 @@ async function forward(request: NextRequest, context: RouteContext): Promise<Res
     return problem(503, "API_UNAVAILABLE", "The Tacit API is unavailable.");
   }
   if (upstream.status >= 300 && upstream.status < 400) {
+    void upstream.body?.cancel().catch(() => undefined);
     return problem(502, "UPSTREAM_REDIRECT", "The Tacit API returned an unexpected redirect.");
   }
   return new Response(upstream.body, {
-    headers: downstreamResponseHeaders(upstream.headers),
+    headers: downstreamResponseHeaders(upstream.headers, eventStream),
     status: upstream.status,
   });
 }
