@@ -104,7 +104,7 @@ Shutdown follows one sequence:
 3. cancel request contexts and close the server at the deadline; and
 4. report whether the process drained cleanly.
 
-There is no WebSocket lifecycle in TAC-004. TAC-010 will add an SSE stream manager that closes long-lived event responses during drain and reconstructs state through a durable cursor. Raw media does not use that stream.
+The API signals the SSE registry before HTTP shutdown. Attached clients reconnect with their last processed cursor. [Realtime replay and drain](realtime.md)
 
 Logs use an allowlist: role, safe HTTP method, route template, status class, and request ID. Headers, bodies, raw URLs, transcript text, tokens, credentials, and arbitrary error strings are excluded.
 

@@ -19,7 +19,7 @@ export default async function ProductLayout({ children }: ProductLayoutProps) {
 
   return (
     <ProductProviders
-      authorization={admission.session.authorization}
+      session={admission.session}
       key={`${admission.session.userId}:${admission.session.organizationId}`}
     >
       <AppShell

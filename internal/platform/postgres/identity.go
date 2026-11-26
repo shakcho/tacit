@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/shakcho/tacit/internal/access"
+	"github.com/shakcho/tacit/internal/runtime/realtime"
 )
 
 var (
@@ -117,15 +118,19 @@ func (store *Store) DenySession(ctx context.Context, identity access.VerifiedIde
 		if err := lockIdentityNamespace(ctx, transaction, identity.Namespace, false); err != nil {
 			return err
 		}
-		if _, err := transaction.Exec(ctx, `
+		tag, err := transaction.Exec(ctx, `
             INSERT INTO tacit_identity_session_denials (namespace, session_id)
             VALUES ($1, $2)
             ON CONFLICT (namespace, session_id) DO NOTHING`,
 			identity.Namespace.String(), identity.Session.String(),
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("deny identity session: %w", err)
 		}
-		return nil
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		return appendIdentityChange(ctx, transaction, identity.Namespace, access.ExternalOrganizationID{}, identity.Subject, realtime.Invalidate)
 	})
 }
 
@@ -171,14 +176,18 @@ func (store *Store) ApplyLifecycle(ctx context.Context, event access.LifecycleEv
 		case access.LifecycleIgnored:
 			result = access.LifecycleRecordedIgnored
 		case access.LifecycleSessionRevoked:
-			if _, err := transaction.Exec(ctx, `
+			tag, err := transaction.Exec(ctx, `
                     INSERT INTO tacit_identity_session_denials (namespace, session_id)
                     VALUES ($1, $2) ON CONFLICT (namespace, session_id) DO NOTHING`,
 				event.Namespace.String(), event.Session.String(),
-			); err != nil {
+			)
+			if err != nil {
 				return fmt.Errorf("apply session revocation: %w", err)
 			}
 			result = access.LifecycleApplied
+			if tag.RowsAffected() != 0 {
+				return appendIdentityChange(ctx, transaction, event.Namespace, event.Organization, event.Subject, realtime.Invalidate)
+			}
 		case access.LifecycleSubjectBlocked:
 			if _, err := transaction.Exec(ctx, `
                     INSERT INTO tacit_identity_subject_states (
@@ -194,6 +203,7 @@ func (store *Store) ApplyLifecycle(ctx context.Context, event access.LifecycleEv
 				return fmt.Errorf("apply subject block: %w", err)
 			}
 			result = access.LifecycleApplied
+			return appendIdentityChange(ctx, transaction, event.Namespace, access.ExternalOrganizationID{}, event.Subject, realtime.ScopeReset)
 		case access.LifecycleOrganizationBlocked:
 			if _, err := transaction.Exec(ctx, `
                     INSERT INTO tacit_identity_organization_states (
@@ -216,6 +226,7 @@ func (store *Store) ApplyLifecycle(ctx context.Context, event access.LifecycleEv
 				return fmt.Errorf("deny organization admissions: %w", err)
 			}
 			result = access.LifecycleApplied
+			return appendIdentityChange(ctx, transaction, event.Namespace, event.Organization, access.ExternalSubject{}, realtime.ScopeReset)
 		case access.LifecycleMembershipActivated:
 			if err := applyMembershipActivation(ctx, transaction, event); err != nil {
 				return err
@@ -366,7 +377,7 @@ func applyInvitationAcceptance(ctx context.Context, transaction pgx.Tx, event ac
 	); err != nil {
 		return fmt.Errorf("accept identity invitation grant: %w", err)
 	}
-	return nil
+	return appendSessionChange(ctx, transaction, grantOrganization, userID, realtime.Invalidate)
 }
 
 func findIdentitySubject(
@@ -391,7 +402,7 @@ func findIdentitySubject(
 }
 
 func applyMembershipActivation(ctx context.Context, transaction pgx.Tx, event access.LifecycleEvent) error {
-	if _, err := transaction.Exec(ctx, `
+	tag, err := transaction.Exec(ctx, `
         INSERT INTO tacit_identity_membership_admissions (
             namespace, external_organization_id, subject, external_membership_id,
             state, source_updated_at, source_event_id
@@ -406,10 +417,14 @@ func applyMembershipActivation(ctx context.Context, transaction pgx.Tx, event ac
           AND EXCLUDED.source_updated_at > tacit_identity_membership_admissions.source_updated_at`,
 		event.Namespace.String(), event.Organization.String(), event.Subject.String(), event.Membership.String(),
 		event.ResourceUpdated, event.ID.String(),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("apply membership activation: %w", err)
 	}
-	return nil
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	return appendIdentityChange(ctx, transaction, event.Namespace, event.Organization, event.Subject, realtime.Invalidate)
 }
 
 func applyMembershipDenial(ctx context.Context, transaction pgx.Tx, event access.LifecycleEvent) error {
@@ -436,7 +451,7 @@ func applyMembershipDenial(ctx context.Context, transaction pgx.Tx, event access
 	); err != nil {
 		return fmt.Errorf("apply membership denial: %w", err)
 	}
-	return nil
+	return appendIdentityChange(ctx, transaction, event.Namespace, event.Organization, event.Subject, realtime.ScopeReset)
 }
 
 func (store *Store) BootstrapIdentity(ctx context.Context, bootstrap access.BootstrapIdentity) error {
@@ -505,7 +520,7 @@ func (store *Store) BootstrapIdentity(ctx context.Context, bootstrap access.Boot
 				return errors.New("identity bootstrap conflicts with existing admission")
 			}
 		}
-		return nil
+		return appendSessionChange(ctx, transaction, organizationID, userID, realtime.Invalidate)
 	})
 }
 

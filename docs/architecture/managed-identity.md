@@ -48,7 +48,7 @@ The Go API uses these variables:
 | `TACIT_WORKOS_JWKS_URL` | Supplies the pinned HTTPS JWKS endpoint. |
 | `TACIT_WORKOS_WEBHOOK_SECRET` | Verifies the raw WorkOS webhook body. |
 
-If no Go identity variable is set, the API starts without identity dependencies for public development checks. A process with `TACIT_ENV=production` refuses to start in that mode. If any identity variable is set, every required variable must be present and PostgreSQL must use schema version 2.
+If no Go identity variable is set, the API starts without identity dependencies for public development checks. A process with `TACIT_ENV=production` requires identity configuration. If any identity variable is set, every required variable must be present. Apply the current PostgreSQL schema before starting the API. [Session realtime configuration](realtime.md) includes the production cursor key and listener URL.
 
 ## Lifecycle behavior
 

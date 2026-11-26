@@ -15,6 +15,7 @@ import (
 
 	"github.com/shakcho/tacit/internal/access"
 	"github.com/shakcho/tacit/internal/runtime/idempotency"
+	"github.com/shakcho/tacit/internal/runtime/realtime"
 )
 
 const removeMembershipScope = "access.remove-membership.v1"
@@ -49,7 +50,10 @@ func (store *Store) CreateOrganization(ctx context.Context, command access.Creat
 		); err != nil {
 			return fmt.Errorf("insert owner role: %w", err)
 		}
-		return insertAudit(ctx, transaction, command.ID, command.Owner, command.Owner, "organization.created")
+		if err := insertAudit(ctx, transaction, command.ID, command.Owner, command.Owner, "organization.created"); err != nil {
+			return err
+		}
+		return appendSessionChange(ctx, transaction, organizationID, ownerID, realtime.Invalidate)
 	})
 }
 
@@ -128,7 +132,7 @@ func addMembership(
 		return err
 	}
 	*result = access.NewMembershipResult(access.MembershipChanged)
-	return nil
+	return appendMembershipChange(ctx, transaction, ref, realtime.Invalidate)
 }
 
 func setMembershipRoles(
@@ -180,7 +184,7 @@ func setMembershipRoles(
 		return err
 	}
 	*result = access.NewMembershipResult(access.MembershipChanged)
-	return nil
+	return appendMembershipChange(ctx, transaction, ref, realtime.Invalidate)
 }
 
 func removeMembership(
@@ -249,7 +253,7 @@ func removeMembership(
 	); err != nil {
 		return fmt.Errorf("record membership command: %w", err)
 	}
-	return nil
+	return appendMembershipChange(ctx, transaction, ref, realtime.ScopeReset)
 }
 
 func (store *Store) FindMembership(ctx context.Context, ref access.MembershipRef) (access.Membership, bool, error) {

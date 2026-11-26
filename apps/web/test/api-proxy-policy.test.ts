@@ -11,6 +11,9 @@ import {
 describe("API proxy policy", () => {
   it("accepts only explicit backend operations", () => {
     expect(isAllowedBackendRequest("GET", "/v1/auth/session")).toBe(true);
+    expect(isAllowedBackendRequest("GET", "/v1/events")).toBe(true);
+    expect(isAllowedBackendRequest("GET", "/v1/events\n")).toBe(false);
+    expect(isAllowedBackendRequest("HEAD", "/v1/events")).toBe(false);
     expect(isAllowedBackendRequest("POST", "/v1/shell-samples")).toBe(true);
     expect(isAllowedBackendRequest("GET", "/internal/auth/session-denials")).toBe(false);
     expect(isAllowedBackendRequest("POST", "/webhooks/workos")).toBe(false);

@@ -11,6 +11,7 @@ servers:
 tags:
   - name: System
   - name: Identity
+  - name: Realtime
   - name: Shell samples
 paths:
   /healthz:
@@ -48,7 +49,7 @@ paths:
         - bearerAuth: []
       responses:
         "200":
-          description: The credential maps to an active local membership.
+          description: The active membership, policy decisions, and replay cursor share a database snapshot.
           headers:
             X-Request-ID:
               $ref: "#/components/headers/RequestID"
@@ -60,6 +61,70 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/events:
+    get:
+      operationId: streamEvents
+      tags: [Realtime]
+      summary: Stream invalidations for the authenticated member session
+      description: |
+        Fetch the canonical authentication session before opening the stream. Supply its cursor or the
+        last fully processed SSE id in Last-Event-ID. The verified token determines the workspace and user.
+        The response begins with an SSE comment and sends heartbeat comments every ten seconds when idle.
+        An invalidate event requests a canonical session refetch. A checkpoint advances the cursor.
+        Resync and access_revoked are terminal events without a cursor. On resync, discard scoped cache
+        data and obtain a new snapshot. On access_revoked, discard scoped data and end the subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          description: Opaque cursor from the last snapshot or fully processed SSE event.
+          required: true
+          schema:
+            $ref: "#/components/schemas/RealtimeCursor"
+      x-sse-events:
+        invalidate:
+          $ref: "#/components/schemas/RealtimeInvalidation"
+        checkpoint:
+          $ref: "#/components/schemas/RealtimeCheckpoint"
+        resync:
+          $ref: "#/components/schemas/RealtimeResync"
+        access_revoked:
+          $ref: "#/components/schemas/RealtimeAccessRevoked"
+      responses:
+        "200":
+          description: Incremental Server-Sent Events.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: "no-store, no-transform"
+            X-Accel-Buffering:
+              schema:
+                type: string
+                const: "no"
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: A query, body, or explicit workspace scope was supplied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: RESYNC_REQUIRED. The resume cursor is missing, unusable, or too far behind.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /internal/auth/session-denials:
@@ -310,7 +375,7 @@ components:
     AuthenticationSession:
       type: object
       additionalProperties: false
-      required: [userId, organizationId, roles, authorization]
+      required: [userId, organizationId, roles, authorization, cursor, revision]
       properties:
         userId:
           $ref: "#/components/schemas/UserID"
@@ -324,6 +389,55 @@ components:
             $ref: "#/components/schemas/MembershipRole"
         authorization:
           $ref: "#/components/schemas/AuthorizationSnapshot"
+        cursor:
+          $ref: "#/components/schemas/RealtimeCursor"
+        revision:
+          $ref: "#/components/schemas/SessionRevision"
+    RealtimeCursor:
+      type: string
+      pattern: "^v1\\.[A-Za-z0-9_-]{75}$"
+      description: Opaque, signed identifier bound to the authenticated user, workspace, and policy revision.
+    SessionRevision:
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,18})$"
+      description: Nonnegative decimal revision through which the workspace session snapshot is current.
+    RealtimeInvalidation:
+      type: object
+      additionalProperties: false
+      required: [resource, revision]
+      properties:
+        resource:
+          type: object
+          additionalProperties: false
+          required: [type, id]
+          properties:
+            type:
+              type: string
+              enum: [authentication_session]
+            id:
+              $ref: "#/components/schemas/UserID"
+        revision:
+          $ref: "#/components/schemas/SessionRevision"
+    RealtimeCheckpoint:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+    RealtimeResync:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum: [RESYNC_REQUIRED]
+    RealtimeAccessRevoked:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum: [ACCESS_REVOKED]
     ShellSampleID:
       type: string
       pattern: "^smp_[0-9a-f]{32}$"

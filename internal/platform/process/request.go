@@ -58,7 +58,7 @@ func safeMethod(method string) string {
 
 func route(path string) string {
 	switch path {
-	case "/healthz", "/readyz", "/openapi.yaml", "/v1/shell-samples":
+	case "/healthz", "/readyz", "/openapi.yaml", "/v1/shell-samples", "/v1/events":
 		return path
 	default:
 		if strings.HasPrefix(path, "/v1/shell-samples/") && !strings.Contains(strings.TrimPrefix(path, "/v1/shell-samples/"), "/") {
