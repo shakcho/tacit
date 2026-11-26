@@ -78,6 +78,12 @@ func (store *Store) timeNow() time.Time {
 	return time.Now().UTC()
 }
 
+func (store *Store) Ready(ctx context.Context) bool {
+	probe, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	return store.pool.Ping(probe) == nil
+}
+
 func (store *Store) Close() {
 	if store == nil {
 		return

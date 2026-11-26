@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,7 @@ type Handler struct {
 	sessionDenier   access.SessionDenier
 	webhookVerifier identityWebhookVerifier
 	realtime        *realtime.Service
+	readiness       func(context.Context) bool
 	mux             *http.ServeMux
 }
 
@@ -58,6 +60,10 @@ func WithRealtime(service *realtime.Service) Option {
 	return func(handler *Handler) { handler.realtime = service }
 }
 
+func WithReadiness(check func(context.Context) bool) Option {
+	return func(handler *Handler) { handler.readiness = check }
+}
+
 func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 	handler := &Handler{samples: samples, mux: http.NewServeMux()}
 	for _, option := range options {
@@ -68,14 +74,20 @@ func NewHandler(samples shellsample.Samples, options ...Option) *Handler {
 	handler.mux.HandleFunc("GET /v1/events", handler.getEvents)
 	handler.mux.HandleFunc("POST /internal/auth/session-denials", handler.denyAuthenticationSession)
 	handler.mux.HandleFunc("POST /webhooks/workos", handler.receiveWorkOSWebhook)
-	handler.mux.HandleFunc("POST /v1/shell-samples", handler.createShellSample)
-	handler.mux.HandleFunc("GET /v1/shell-samples/{sampleId}", handler.getShellSample)
+	if samples != nil {
+		handler.mux.HandleFunc("POST /v1/shell-samples", handler.createShellSample)
+		handler.mux.HandleFunc("GET /v1/shell-samples/{sampleId}", handler.getShellSample)
+	}
 	handler.mux.HandleFunc("/", handler.notFound)
 	return handler
 }
 
 func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	handler.mux.ServeHTTP(response, request)
+}
+
+func (handler *Handler) Ready(ctx context.Context) bool {
+	return handler.readiness == nil || handler.readiness(ctx)
 }
 
 func (handler *Handler) Drain() {

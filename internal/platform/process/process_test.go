@@ -122,6 +122,22 @@ func TestHTTPDrainCompletesActiveRequest(t *testing.T) {
 	awaitResult(t, result, nil)
 }
 
+type unavailableHandler struct{}
+
+func (unavailableHandler) Ready(context.Context) bool                   { return false }
+func (unavailableHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func TestDependencyReadinessDoesNotChangeLiveness(t *testing.T) {
+	handler := newLifecycle().handler(unavailableHandler{})
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/readyz": http.StatusServiceUnavailable} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != want {
+			t.Errorf("%s returned %d, want %d", path, response.Code, want)
+		}
+	}
+}
+
 func TestLifecycleRejectsTrafficDuringDrain(t *testing.T) {
 	life := newLifecycle()
 	life.drain()

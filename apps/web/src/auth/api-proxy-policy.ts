@@ -2,8 +2,7 @@ const safeMethods = new Set(["GET", "HEAD"]);
 
 export const eventsPath = "/v1/events";
 
-const allowedRoutes = [
-  { method: "GET", pattern: /^\/v1\/auth\/session$/u },
+const localRoutes = [
   { method: "GET", pattern: /^\/v1\/shell-samples\/smp_[0-9a-f]{32}$/u },
   { method: "POST", pattern: /^\/v1\/shell-samples$/u },
 ] as const;
@@ -21,8 +20,9 @@ export function backendPath(segments: readonly string[]): string | null {
 }
 
 export function isAllowedBackendRequest(method: string, path: string): boolean {
-  if (path === eventsPath) return method === "GET";
-  return allowedRoutes.some((route) => route.method === method && route.pattern.test(path));
+  if (path === eventsPath || path === "/v1/auth/session") return method === "GET";
+  return process.env.NODE_ENV !== "production"
+    && localRoutes.some((route) => route.method === method && route.pattern.test(path));
 }
 
 export function isSafeMethod(method: string): boolean {

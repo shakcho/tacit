@@ -40,13 +40,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		fmt.Fprintf(stdout, "database migrated to schema version %d\n", postgres.CurrentSchemaVersion)
 		return nil
 	}
+	if len(args) == 1 && args[0] == "verify-schema" {
+		if err := postgres.VerifySchema(ctx, getenv("TACIT_DATABASE_DIRECT_URL")); err != nil {
+			return errors.New("database schema is incompatible or unavailable")
+		}
+		fmt.Fprintf(stdout, "database schema version %d verified\n", postgres.CurrentSchemaVersion)
+		return nil
+	}
 	if len(args) > 0 && args[0] == "demo-bootstrap" {
 		return runDemoBootstrap(ctx, args[1:], stdout, stderr, getenv)
 	}
 	if len(args) > 0 && args[0] == "invitation-grant" {
 		return runInvitationGrant(ctx, args[1:], stdout, stderr, getenv)
 	}
-	return errors.New("usage: tacit-db migrate | tacit-db demo-bootstrap [options] | tacit-db invitation-grant [options] | tacit-db --version")
+	return errors.New("usage: tacit-db migrate | tacit-db verify-schema | tacit-db demo-bootstrap [options] | tacit-db invitation-grant [options] | tacit-db --version")
 }
 
 func runDemoBootstrap(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) error {

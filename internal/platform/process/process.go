@@ -64,7 +64,8 @@ func (life *lifecycle) handler(application http.Handler) http.Handler {
 				writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 				return
 			case "/readyz":
-				if life.ready() {
+				readiness, checksDependencies := application.(interface{ Ready(context.Context) bool })
+				if life.ready() && (!checksDependencies || readiness.Ready(request.Context())) && life.ready() {
 					writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 				} else {
 					writeUnavailable(response, request)

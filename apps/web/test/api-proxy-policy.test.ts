@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   backendPath,
@@ -23,6 +23,18 @@ describe("API proxy policy", () => {
     expect(backendPath(["v1", "auth", "session"])).toBe("/v1/auth/session");
     expect(backendPath(["v1", "..", "readyz"])).toBeNull();
     expect(backendPath(["v1/auth", "session"])).toBeNull();
+  });
+
+  it("allows durable routes and hides process-local samples in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      expect(isAllowedBackendRequest("GET", "/v1/auth/session")).toBe(true);
+      expect(isAllowedBackendRequest("GET", "/v1/events")).toBe(true);
+      expect(isAllowedBackendRequest("POST", "/v1/shell-samples")).toBe(false);
+      expect(isAllowedBackendRequest("GET", "/v1/shell-samples/smp_0123456789abcdef0123456789abcdef")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("requires the configured origin for unsafe requests", () => {

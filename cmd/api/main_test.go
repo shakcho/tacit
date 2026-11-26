@@ -51,6 +51,40 @@ func TestDefaultListenAddress(t *testing.T) {
 	}
 }
 
+func TestAPIPoolMaximum(t *testing.T) {
+	for _, raw := range []string{"", "-1", "0", "5", "invalid"} {
+		if _, err := apiPoolMaximum(raw, true); err == nil {
+			t.Errorf("production accepted pool configuration %q", raw)
+		}
+	}
+	if size, err := apiPoolMaximum("3", true); err != nil || size != 3 {
+		t.Fatalf("pool size = %d, %v", size, err)
+	}
+	if size, err := apiPoolMaximum("", false); err != nil || size != 4 {
+		t.Fatalf("development pool size = %d, %v", size, err)
+	}
+}
+
+func TestProductionDatabaseEndpoints(t *testing.T) {
+	t.Setenv("TACIT_DATABASE_POOLER_ENDPOINT", "pooler.example.test:6543")
+	t.Setenv("TACIT_DATABASE_POOLER_DATABASE", "tacit")
+	t.Setenv("TACIT_DATABASE_POOLER_LOGIN", "tacit_api")
+	pool := "postgres://tacit_api:example@pooler.example.test:6543/tacit"
+	listener := "postgres://tacit_listener:example@db.example.test:5432/tacit"
+	if err := validateDatabaseEndpoints(pool, listener); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", pool, strings.TrimSuffix(listener, "/tacit") + "/other"} {
+		if err := validateDatabaseEndpoints(pool, invalid); err == nil {
+			t.Error("accepted a missing, pooled, or cross-database listener")
+		}
+	}
+	t.Setenv("TACIT_DATABASE_POOLER_LOGIN", "another_login")
+	if err := validateDatabaseEndpoints(pool, listener); err == nil {
+		t.Error("accepted a connection to an unbudgeted pool tuple")
+	}
+}
+
 func TestOpenAPIControlPlaneShell(t *testing.T) {
 	t.Parallel()
 

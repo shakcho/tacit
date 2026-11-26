@@ -139,6 +139,43 @@ func Migrate(ctx context.Context, databaseURL string) error {
 	return nil
 }
 
+func VerifySchema(ctx context.Context, databaseURL string) error {
+	if databaseURL == "" {
+		return errors.New("database URL is required")
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = connection.Close(context.Background()) }()
+	transaction, err := connection.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = transaction.Rollback(context.Background()) }()
+	applied, err := appliedMigrations(ctx, transaction)
+	if err != nil {
+		return err
+	}
+	if len(applied) != len(migrations) {
+		return ErrSchemaVersion
+	}
+	for _, migration := range migrations {
+		checksum, exists := applied[migration.Version]
+		if !exists {
+			return ErrSchemaVersion
+		}
+		if checksum != migration.Checksum {
+			return ErrMigrationChecksum
+		}
+	}
+	return transaction.Commit(ctx)
+}
+
 func appliedMigrations(ctx context.Context, transaction pgx.Tx) (map[int64]string, error) {
 	rows, err := transaction.Query(ctx, `SELECT version, checksum FROM tacit_schema_migrations ORDER BY version`)
 	if err != nil {

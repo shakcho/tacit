@@ -14,6 +14,9 @@
 {{- $args := list }}
 {{- if eq $role "api" }}
   {{- $_ := set $env "TACIT_DATABASE_MAX_CONNECTIONS" (toString $workload.database.poolPerPod) }}
+  {{- $_ := set $env "TACIT_DATABASE_POOLER_ENDPOINT" (printf "%s:%d" $.Values.database.apiPool.pooler (int (index $catalog.network.edges.external "api-pooler").port)) }}
+  {{- $_ := set $env "TACIT_DATABASE_POOLER_DATABASE" $.Values.database.apiPool.database }}
+  {{- $_ := set $env "TACIT_DATABASE_POOLER_LOGIN" $.Values.database.apiPool.login }}
   {{- $args = list (printf "--listen=0.0.0.0:%d" (int $workload.port)) (printf "--drain-timeout=%ds" (int $workload.lifecycle.drainSeconds)) }}
 {{- else }}
   {{- $host = $.Values.ingress.webHost }}

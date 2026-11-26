@@ -133,6 +133,20 @@ func createRequest(body, key string) *http.Request {
 	return request
 }
 
+func TestShellSamplesAreAbsentWithoutAStore(t *testing.T) {
+	handler := httpapi.NewHandler(nil)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/v1/shell-samples", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/shell-samples/"+sampleID, nil),
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("%s %s returned %d", request.Method, request.URL.Path, response.Code)
+		}
+	}
+}
+
 func TestCreateReplayAndFindShellSample(t *testing.T) {
 	handler := newHandler()
 	body := `{"id":"` + sampleID + `","offsetMicroseconds":"1234567"}`
