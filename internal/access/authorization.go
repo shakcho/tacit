@@ -419,6 +419,12 @@ func ContextDecisions(principal LocalPrincipal) DecisionSet {
 	return DecisionSet{decisions: decisions}
 }
 
+// AllowsAuthenticationSession evaluates access to the member's own session.
+func AllowsAuthenticationSession(principal LocalPrincipal, action Action, owner UserID) bool {
+	return (action == ActionRead || action == ActionSubscribe) && owner.Valid() && principal.UserID() == owner &&
+		ContextDecisions(principal).AllowsCapability(ActionRead, ResourceOrganization)
+}
+
 func ResourceDecisions(principal LocalPrincipal, facts ResourceFacts) DecisionSet {
 	return decisionsFor(policyAuthority{kind: authorityMember, member: principal, now: time.Now()}, facts)
 }
