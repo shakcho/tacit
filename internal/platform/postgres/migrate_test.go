@@ -14,4 +14,7 @@ func TestMigrationInventory(t *testing.T) {
 	if migrations[0].Name != "foundation" || len(migrations[0].Checksum) != 64 {
 		t.Fatalf("migration = %#v", migrations[0])
 	}
+	if migrations[2].Name != "durable_work" || len(migrations[2].Checksum) != 64 {
+		t.Fatalf("migration = %#v", migrations[2])
+	}
 }

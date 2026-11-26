@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/shakcho/tacit/internal/access"
+	"github.com/shakcho/tacit/internal/runtime/durable"
 	"github.com/shakcho/tacit/internal/runtime/idempotency"
 )
 
@@ -37,7 +39,10 @@ func integrationStore(t *testing.T) *Store {
 	}
 	t.Cleanup(store.Close)
 	if _, err := store.pool.Exec(t.Context(), `
-        TRUNCATE tacit_identity_event_inbox, tacit_identity_invitation_grants,
+		TRUNCATE tacit_runtime_consumer_inbox, tacit_runtime_provider_inbox,
+			tacit_runtime_dead_letters, tacit_runtime_outbox, tacit_runtime_job_attempts,
+			tacit_runtime_command_outcomes, tacit_runtime_concurrency_limits, tacit_runtime_jobs,
+			tacit_identity_event_inbox, tacit_identity_invitation_grants,
             tacit_identity_organization_states, tacit_identity_subject_states,
             tacit_identity_session_denials, tacit_identity_membership_admissions,
             tacit_identity_organizations, tacit_idempotency_records, tacit_access_audit, tacit_membership_external_ids,
@@ -190,7 +195,7 @@ func TestMigrationsAreRepeatable(t *testing.T) {
 	}
 }
 
-func TestPopulatedVersionOneUpgradesToVersionTwo(t *testing.T) {
+func TestPopulatedVersionOneUpgradesToCurrentVersion(t *testing.T) {
 	baseURL := os.Getenv("TACIT_TEST_DATABASE_URL")
 	if baseURL == "" {
 		t.Fatal("TACIT_TEST_DATABASE_URL is required for integration tests")
@@ -802,5 +807,267 @@ func TestInvitationAcceptanceUsesRegisteredRoleWithoutEmailLinkingOrEscalation(t
 	}
 	if adminRoles != 0 {
 		t.Fatalf("existing membership was escalated to admin")
+	}
+}
+
+func durableCommand(t *testing.T, organization access.OrganizationID, clientKey string, now time.Time) durable.EnqueueCommand {
+	t.Helper()
+	return durable.EnqueueCommand{
+		Organization: organization, Key: key(t, clientKey), OperationScope: "integration.render.v1",
+		Kind: "highlight.render", Workload: "media", InputVersion: 1,
+		Input: json.RawMessage(`{"generationId":"generation_1"}`), ResourceType: "highlight",
+		ResourceID: "highlight_1", ResourceRevision: 1, CorrelationID: "request_1",
+		AvailableAt: now, MaxAttempts: 3,
+	}
+}
+
+func TestDurableCommandReplayAndConflict(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 200)
+	owner := userID(t, 200)
+	seedOrganization(t, store, organization, owner)
+	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	command := durableCommand(t, organization, "render-command", now)
+
+	created, err := store.Enqueue(t.Context(), command)
+	if err != nil || created.Replayed || created.Job.State != durable.JobStateQueued {
+		t.Fatalf("created = %#v, %v", created, err)
+	}
+	replayed, err := store.Enqueue(t.Context(), command)
+	if err != nil || !replayed.Replayed || replayed.Job.ID != created.Job.ID {
+		t.Fatalf("replayed = %#v, %v", replayed, err)
+	}
+	command.ResourceRevision++
+	if _, err := store.Enqueue(t.Context(), command); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting command error = %v", err)
+	}
+	var jobs, events int
+	if err := store.pool.QueryRow(t.Context(), `SELECT count(*) FROM tacit_runtime_jobs`).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(t.Context(), `SELECT count(*) FROM tacit_runtime_outbox`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 || events != 1 {
+		t.Fatalf("jobs=%d events=%d", jobs, events)
+	}
+}
+
+func TestExpiredLeaseCannotCompleteAfterReplacement(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 201)
+	owner := userID(t, 201)
+	seedOrganization(t, store, organization, owner)
+	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	created, err := store.Enqueue(t.Context(), durableCommand(t, organization, "lease-replacement", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, claimed, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Workload: "media", WorkerID: "worker-1", LeaseDuration: time.Minute,
+	})
+	if err != nil || !claimed {
+		t.Fatalf("first claim = %#v, %v, %v", first, claimed, err)
+	}
+	now = now.Add(2 * time.Minute)
+	second, claimed, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Workload: "media", WorkerID: "worker-2", LeaseDuration: time.Minute,
+	})
+	if err != nil || !claimed || second.Fence <= first.Fence || second.Attempt <= first.Attempt {
+		t.Fatalf("replacement claim = %#v, %v, %v", second, claimed, err)
+	}
+	output, _ := durable.Succeeded(1, json.RawMessage(`{"artifact":"object://attempt"}`))
+	if _, err := store.Complete(t.Context(), durable.Completion{
+		Organization: organization, JobID: created.Job.ID, Attempt: first.Attempt,
+		Fence: first.Fence, WorkerID: first.WorkerID, Result: output,
+	}); !errors.Is(err, durable.ErrLeaseLost) {
+		t.Fatalf("stale completion error = %v", err)
+	}
+	completed, err := store.Complete(t.Context(), durable.Completion{
+		Organization: organization, JobID: created.Job.ID, Attempt: second.Attempt,
+		Fence: second.Fence, WorkerID: second.WorkerID, Result: output,
+	})
+	if err != nil || completed.State != durable.JobStateSucceeded || completed.OutputVersion != 1 {
+		t.Fatalf("completion = %#v, %v", completed, err)
+	}
+	replayedCompletion, err := store.Complete(t.Context(), durable.Completion{
+		Organization: organization, JobID: created.Job.ID, Attempt: second.Attempt,
+		Fence: second.Fence, WorkerID: second.WorkerID, Result: output,
+	})
+	if err != nil || replayedCompletion.State != durable.JobStateSucceeded {
+		t.Fatalf("replayed completion = %#v, %v", replayedCompletion, err)
+	}
+	var expired, succeeded int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FILTER (WHERE state = 'expired'), count(*) FILTER (WHERE state = 'succeeded')
+        FROM tacit_runtime_job_attempts WHERE organization_id = $1 AND job_id = $2`,
+		databaseUUID(organization.Bytes()), databaseUUID(created.Job.ID.Bytes()),
+	).Scan(&expired, &succeeded); err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 || succeeded != 1 {
+		t.Fatalf("expired=%d succeeded=%d", expired, succeeded)
+	}
+	var events int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT count(*) FROM tacit_runtime_outbox
+        WHERE organization_id = $1 AND aggregate_id = $2`,
+		databaseUUID(organization.Bytes()), created.Job.ID.String(),
+	).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 {
+		t.Fatalf("outbox events after completion replay = %d", events)
+	}
+}
+
+func TestOutboxPublishLeaseRecoversAndCanRebuildBrokerDelivery(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 202)
+	owner := userID(t, 202)
+	seedOrganization(t, store, organization, owner)
+	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	created, err := store.Enqueue(t.Context(), durableCommand(t, organization, "outbox-recovery", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ClaimOutbox(t.Context(), durable.OutboxClaim{
+		PublisherID: "dispatch-1", LeaseDuration: time.Minute, Limit: 10,
+	})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first outbox claim = %#v, %v", first, err)
+	}
+	now = now.Add(2 * time.Minute)
+	second, err := store.ClaimOutbox(t.Context(), durable.OutboxClaim{
+		PublisherID: "dispatch-2", LeaseDuration: time.Minute, Limit: 10,
+	})
+	if err != nil || len(second) != 1 || second[0].Envelope.ID != first[0].Envelope.ID {
+		t.Fatalf("replacement outbox claim = %#v, %v", second, err)
+	}
+	if err := store.MarkOutboxPublished(t.Context(), "dispatch-1", first[0].Envelope.ID); !errors.Is(err, durable.ErrLeaseLost) {
+		t.Fatalf("stale publisher error = %v", err)
+	}
+	if err := store.MarkOutboxPublished(t.Context(), "dispatch-2", second[0].Envelope.ID); err != nil {
+		t.Fatal(err)
+	}
+	requeued, err := store.RequeuePublished(t.Context(), now, 10)
+	if err != nil || requeued != 1 {
+		t.Fatalf("requeued = %d, %v", requeued, err)
+	}
+	rebuilt, err := store.ClaimOutbox(t.Context(), durable.OutboxClaim{
+		PublisherID: "dispatch-3", LeaseDuration: time.Minute, Limit: 10,
+	})
+	if err != nil || len(rebuilt) != 1 || rebuilt[0].Envelope.ID != first[0].Envelope.ID {
+		t.Fatalf("rebuilt outbox = %#v, %v", rebuilt, err)
+	}
+	job, found, err := store.FindJob(t.Context(), organization, created.Job.ID)
+	if err != nil || !found || job.State != durable.JobStateQueued {
+		t.Fatalf("canonical job after broker rebuild = %#v, %v, %v", job, found, err)
+	}
+}
+
+func TestConsumerReceiptReplaysOrRejectsConflictingPayload(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 203)
+	owner := userID(t, 203)
+	seedOrganization(t, store, organization, owner)
+	eventID, _ := durable.ParseEventID("evt_00000000000000000000000000000203")
+	receipt := durable.ConsumerReceipt{
+		Consumer: "delivery-projector",
+		Event: durable.EventEnvelope{
+			ID: eventID, Schema: "tacit.runtime.job.ready", SchemaVersion: 1,
+			OrganizationID: organization.String(), AggregateType: "job",
+			AggregateID: "job_00000000000000000000000000000203", AggregateRevision: 1,
+			CorrelationID: "request_203", OccurredAt: time.Now().UTC(), Payload: json.RawMessage(`{"jobId":"job_203"}`),
+		},
+		OutcomeVersion: 1, Outcome: json.RawMessage(`{"status":"applied"}`),
+	}
+	if replayed, err := store.RecordConsumerReceipt(t.Context(), receipt); err != nil || replayed {
+		t.Fatalf("first receipt = %v, %v", replayed, err)
+	}
+	if replayed, err := store.RecordConsumerReceipt(t.Context(), receipt); err != nil || !replayed {
+		t.Fatalf("replayed receipt = %v, %v", replayed, err)
+	}
+	receipt.Event.Payload = json.RawMessage(`{"jobId":"different"}`)
+	if _, err := store.RecordConsumerReceipt(t.Context(), receipt); !errors.Is(err, durable.ErrDuplicateConflict) {
+		t.Fatalf("conflicting receipt error = %v", err)
+	}
+}
+
+func TestWorkloadConcurrencyLimitPreventsSecondClaim(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 204)
+	owner := userID(t, 204)
+	seedOrganization(t, store, organization, owner)
+	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	for _, clientKey := range []string{"limited-1", "limited-2"} {
+		if _, err := store.Enqueue(t.Context(), durableCommand(t, organization, clientKey, now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+        INSERT INTO tacit_runtime_concurrency_limits (organization_id, workload, maximum_running)
+        VALUES ($1, 'media', 1)`, databaseUUID(organization.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Workload: "media", WorkerID: "worker-1", LeaseDuration: time.Minute,
+	}); err != nil || !claimed {
+		t.Fatalf("first limited claim = %v, %v", claimed, err)
+	}
+	if assignment, claimed, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Workload: "media", WorkerID: "worker-2", LeaseDuration: time.Minute,
+	}); err != nil || claimed {
+		t.Fatalf("second limited claim = %#v, %v, %v", assignment, claimed, err)
+	}
+}
+
+func TestDeadlineFailureAndOperatorReplay(t *testing.T) {
+	store := integrationStore(t)
+	organization := organizationID(t, 205)
+	owner := userID(t, 205)
+	seedOrganization(t, store, organization, owner)
+	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	command := durableCommand(t, organization, "deadline-replay", now)
+	command.DeadlineAt = now.Add(time.Minute)
+	command.MaxAttempts = 1
+	created, err := store.Enqueue(t.Context(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	expired, err := store.ExpireDeadlines(t.Context(), 10)
+	if err != nil || expired != 1 {
+		t.Fatalf("expired = %d, %v", expired, err)
+	}
+	failed, found, err := store.FindJob(t.Context(), organization, created.Job.ID)
+	if err != nil || !found || failed.State != durable.JobStateFailed {
+		t.Fatalf("deadline job = %#v, %v, %v", failed, found, err)
+	}
+	replayed, err := store.ReplayDeadLetter(t.Context(), organization, created.Job.ID, "operator-1", now)
+	if err != nil || replayed.State != durable.JobStateRetryWait || replayed.MaxAttempts != 2 {
+		t.Fatalf("replayed = %#v, %v", replayed, err)
+	}
+	assignment, claimed, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Workload: "media", WorkerID: "worker-replay", LeaseDuration: time.Minute,
+	})
+	if err != nil || !claimed || assignment.Job.ID != created.Job.ID {
+		t.Fatalf("replay claim = %#v, %v, %v", assignment, claimed, err)
+	}
+	var replayCount int
+	if err := store.pool.QueryRow(t.Context(), `
+        SELECT replay_count FROM tacit_runtime_dead_letters
+        WHERE organization_id = $1 AND job_id = $2`,
+		databaseUUID(organization.Bytes()), databaseUUID(created.Job.ID.Bytes()),
+	).Scan(&replayCount); err != nil {
+		t.Fatal(err)
+	}
+	if replayCount != 1 {
+		t.Fatalf("replay count = %d", replayCount)
 	}
 }

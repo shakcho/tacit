@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.tacit.dev/runtime/v1/event-envelope.schema.json",
+  "title": "Tacit runtime event envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "schema",
+    "schemaVersion",
+    "organizationId",
+    "aggregateType",
+    "aggregateId",
+    "aggregateRevision",
+    "correlationId",
+    "occurredAt",
+    "payload"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "pattern": "^evt_[0-9a-f]{32}$" },
+    "schema": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "schemaVersion": { "const": 1 },
+    "organizationId": { "type": "string", "pattern": "^org_[0-9a-f]{32}$" },
+    "aggregateType": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "aggregateId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "aggregateRevision": { "type": "integer", "minimum": 1 },
+    "causationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "correlationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

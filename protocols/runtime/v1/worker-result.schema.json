@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.tacit.dev/runtime/v1/worker-result.schema.json",
+  "title": "Tacit worker result v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "outputVersion", "output"],
+      "properties": {
+        "kind": { "const": "succeeded" },
+        "outputVersion": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "output": { "type": "object" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "retryAt"],
+      "properties": {
+        "kind": { "const": "retry" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason"],
+      "properties": {
+        "kind": { "const": "terminal_failure" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    }
+  ]
+}
