@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "schemaVersion": 4,
+  "phase": "application",
+  "environment": "example",
+  "revision": "0123456789abcdef",
+  "images": {
+    "web": "registry.example.com/tacit/web@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "api": "registry.example.com/tacit/api@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "db": "registry.example.com/tacit/db@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "secrets": { "web": "tacit-web", "api": "tacit-api", "migration": "tacit-migration" },
+  "ingress": {
+    "webHost": "tacit.example.com", "webTLSSecret": "tacit-web-tls",
+    "webhookHost": "webhooks.example.com", "webhookTLSSecret": "tacit-webhooks-tls"
+  },
+  "egress": {
+    "web-workos": ["192.0.2.10/32"],
+    "api-workos": ["192.0.2.10/32"],
+    "api-pooler": ["192.0.2.20/32"],
+    "api-listen": ["192.0.2.21/32"],
+    "migration-direct": ["192.0.2.21/32"]
+  },
+  "database": {
+    "apiPool": { "pooler": "pooler.example.com", "database": "postgres", "login": "tacit_api", "mode": "transaction", "backendLimit": 15 },
+    "additionalPools": [],
+    "additionalDirect": 0
+  }
+}

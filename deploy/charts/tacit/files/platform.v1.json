@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "schemaVersion": 4,
+  "security": {
+    "podSecurityVersion": "v1.32",
+    "seccompProfile": "RuntimeDefault"
+  },
+  "workloads": {
+    "web": {
+      "kind": "deployment",
+      "artifact": "web",
+      "uid": 1001,
+      "gid": 1001,
+      "writable": { "tmp": "/tmp", "next-cache": "/app/apps/web/.next/cache" },
+      "port": 3000,
+      "resources": { "requestCPU": 100, "requestMemory": 128, "limitCPU": 500, "limitMemory": 512, "scratch": 128 },
+      "scale": { "min": 2, "max": 3, "surge": 1, "admittedPods": 4, "cpuTarget": 65, "pdbMin": 1 },
+      "lifecycle": { "live": "/healthz", "ready": "/readyz", "graceSeconds": 30 },
+      "secretKeys": { "WORKOS_API_KEY": "workos-api-key", "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" },
+      "database": { "kind": "none" }
+    },
+    "api": {
+      "kind": "deployment",
+      "artifact": "api",
+      "uid": 65532,
+      "gid": 65532,
+      "writable": {},
+      "port": 8080,
+      "resources": { "requestCPU": 100, "requestMemory": 64, "limitCPU": 500, "limitMemory": 256, "scratch": 32 },
+      "scale": { "min": 2, "max": 3, "surge": 1, "admittedPods": 4, "cpuTarget": 65, "pdbMin": 1 },
+      "lifecycle": { "live": "/healthz", "ready": "/readyz", "graceSeconds": 30, "drainSeconds": 10 },
+      "secretKeys": { "TACIT_DATABASE_URL": "database-url", "TACIT_REALTIME_LISTEN_DATABASE_URL": "listen-database-url", "TACIT_REALTIME_CURSOR_KEY": "realtime-cursor-key", "TACIT_IDENTITY_NAMESPACE": "identity-namespace", "TACIT_WORKOS_CLIENT_ID": "workos-client-id", "TACIT_WORKOS_ISSUER": "workos-issuer", "TACIT_WORKOS_JWKS_URL": "workos-jwks-url", "TACIT_WORKOS_WEBHOOK_SECRET": "workos-webhook-secret" },
+      "database": { "kind": "transaction-and-direct-listen", "poolPerPod": 4, "directPerPod": 1 }
+    },
+    "migration": {
+      "kind": "job",
+      "artifact": "db",
+      "uid": 65532,
+      "gid": 65532,
+      "writable": {},
+      "resources": { "requestCPU": 100, "requestMemory": 64, "limitCPU": 500, "limitMemory": 256, "scratch": 32 },
+      "admittedPods": 1,
+      "lifecycle": { "graceSeconds": 15, "deadlineSeconds": 300, "ttlSeconds": 3600 },
+      "secretKeys": { "TACIT_DATABASE_DIRECT_URL": "migration-database-url" },
+      "database": { "kind": "direct-ddl", "directPerPod": 1 }
+    },
+    "dispatch": { "kind": "contract", "authority": "outbox-and-broker" },
+    "worker-ingress": { "kind": "contract", "authority": "fenced-job-leases" },
+    "connectors": { "kind": "contract", "authority": "connector-provider-operation-permits" },
+    "capture": { "kind": "contract", "authority": "fenced-capture-and-object-writes" },
+    "media": { "kind": "contract", "authority": "eligible-media-work" },
+    "speech": { "kind": "contract", "authority": "measured-gpu-session-admission" },
+    "llm": { "kind": "contract", "authority": "llm-provider-operation-permits" },
+    "delivery": { "kind": "contract", "authority": "delivery-provider-operation-permits" }
+  },
+  "network": {
+    "ingressClass": "traefik",
+    "ingressPeer": { "namespace": "traefik", "labels": { "app.kubernetes.io/name": "traefik" } },
+    "dnsPeer": { "namespace": "kube-system", "labels": { "k8s-app": "kube-dns" } },
+    "webExactPaths": ["/", "/favicon.ico", "/icon.svg", "/verifiedsignup", "/app-login"],
+    "webPrefixPaths": ["/_next", "/api", "/auth", "/design-system", "/help", "/highlights", "/meeting", "/meetings", "/playlists", "/profile", "/projects", "/search", "/share"],
+    "webhookPath": "/webhooks/workos",
+    "edges": {
+      "ingress": ["web", "api"],
+      "dns": ["web", "api", "migration"],
+      "internal": [{ "from": "web", "to": "api" }],
+      "external": {
+        "web-workos": { "from": "web", "port": 443 },
+        "api-workos": { "from": "api", "port": 443 },
+        "api-pooler": { "from": "api", "port": 6543 },
+        "api-listen": { "from": "api", "port": 5432 },
+        "migration-direct": { "from": "migration", "port": 5432 }
+      }
+    }
+  },
+  "database": {
+    "provider": "supabase",
+    "maxBackendConnections": 60,
+    "providerReservedConnections": 20,
+    "otherDirectHeadroom": 3,
+    "maxClientsPerPooler": 200
+  },
+  "futureCapacity": {
+    "connectorProvider": 0,
+    "llmProvider": 0,
+    "deliveryProvider": 0,
+    "speechGPU": 0
+  }
+}

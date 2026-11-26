@@ -1,12 +1,7 @@
-import { readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { example, loadBindings, loadRegistry, projectDatabaseBudget, readJSON } from "./platform-config.mjs";
 
-import { validateDatabaseBudget } from "./database-budget.mjs";
+const registry = loadRegistry();
+const bindings = loadBindings(readJSON(example), registry);
+const totals = projectDatabaseBudget(registry, bindings.database);
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const path = join(root, "deploy/database/connections.json");
-const budget = JSON.parse(await readFile(path, "utf8"));
-const totals = validateDatabaseBudget(budget);
-
-console.log(`Database connection budget passed: ${totals.backendConnections} backend and ${totals.clientConnections} pooler clients.`);
+console.log(`Database connection budget passed: ${totals.backendConnections} backend and ${totals.apiClients} API pooler clients.`);

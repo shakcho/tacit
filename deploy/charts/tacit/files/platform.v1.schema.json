@@ -1,0 +1,170 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "schemaVersion", "security", "workloads", "network", "database", "futureCapacity"],
+  "properties": {
+    "version": { "const": 1 },
+    "schemaVersion": { "const": 4 },
+    "security": {
+      "type": "object", "additionalProperties": false, "required": ["podSecurityVersion", "seccompProfile"],
+      "properties": { "podSecurityVersion": { "const": "v1.32" }, "seccompProfile": { "const": "RuntimeDefault" } }
+    },
+    "workloads": {
+      "type": "object", "additionalProperties": false,
+      "required": ["web", "api", "migration", "dispatch", "worker-ingress", "connectors", "capture", "media", "speech", "llm", "delivery"],
+      "properties": {
+        "web": { "$ref": "#/definitions/web" },
+        "api": { "$ref": "#/definitions/api" },
+        "migration": { "$ref": "#/definitions/migration" },
+        "dispatch": { "$ref": "#/definitions/contract" },
+        "worker-ingress": { "$ref": "#/definitions/contract" },
+        "connectors": { "$ref": "#/definitions/contract" },
+        "capture": { "$ref": "#/definitions/contract" },
+        "media": { "$ref": "#/definitions/contract" },
+        "speech": { "$ref": "#/definitions/contract" },
+        "llm": { "$ref": "#/definitions/contract" },
+        "delivery": { "$ref": "#/definitions/contract" }
+      }
+    },
+    "network": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ingressClass", "ingressPeer", "dnsPeer", "webExactPaths", "webPrefixPaths", "webhookPath", "edges"],
+      "properties": {
+        "ingressClass": { "const": "traefik" },
+        "ingressPeer": { "$ref": "#/definitions/peer" },
+        "dnsPeer": { "$ref": "#/definitions/peer" },
+        "webExactPaths": { "$ref": "#/definitions/routes" },
+        "webPrefixPaths": { "$ref": "#/definitions/routes" },
+        "webhookPath": { "const": "/webhooks/workos" },
+        "edges": {
+          "type": "object", "additionalProperties": false, "required": ["ingress", "dns", "internal", "external"],
+          "properties": {
+            "ingress": { "const": ["web", "api"] },
+            "dns": { "const": ["web", "api", "migration"] },
+            "internal": { "const": [{ "from": "web", "to": "api" }] },
+            "external": {
+              "type": "object", "additionalProperties": false,
+              "required": ["web-workos", "api-workos", "api-pooler", "api-listen", "migration-direct"],
+              "properties": {
+                "web-workos": { "const": { "from": "web", "port": 443 } },
+                "api-workos": { "const": { "from": "api", "port": 443 } },
+                "api-pooler": { "const": { "from": "api", "port": 6543 } },
+                "api-listen": { "const": { "from": "api", "port": 5432 } },
+                "migration-direct": { "const": { "from": "migration", "port": 5432 } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "database": {
+      "type": "object", "additionalProperties": false, "required": ["provider", "maxBackendConnections", "providerReservedConnections", "otherDirectHeadroom", "maxClientsPerPooler"],
+      "properties": {
+        "provider": { "const": "supabase" },
+        "maxBackendConnections": { "$ref": "#/definitions/positive" },
+        "providerReservedConnections": { "$ref": "#/definitions/positive" },
+        "otherDirectHeadroom": { "$ref": "#/definitions/positive" },
+        "maxClientsPerPooler": { "$ref": "#/definitions/positive" }
+      }
+    },
+    "futureCapacity": { "const": { "connectorProvider": 0, "llmProvider": 0, "deliveryProvider": 0, "speechGPU": 0 } }
+  },
+  "definitions": {
+    "positive": { "type": "integer", "minimum": 1, "maximum": 100000 },
+    "contract": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "authority"],
+      "properties": { "kind": { "const": "contract" }, "authority": { "type": "string", "pattern": "^[a-z][a-z0-9-]+$" } }
+    },
+    "peer": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "labels"],
+      "properties": {
+        "namespace": { "type": "string", "pattern": "^[a-z][a-z0-9-]+$" },
+        "labels": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "routes": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^/(?:[a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]*$" }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestCPU", "requestMemory", "limitCPU", "limitMemory", "scratch"],
+      "properties": {
+        "requestCPU": { "$ref": "#/definitions/positive" }, "requestMemory": { "$ref": "#/definitions/positive" },
+        "limitCPU": { "$ref": "#/definitions/positive" }, "limitMemory": { "$ref": "#/definitions/positive" },
+        "scratch": { "$ref": "#/definitions/positive" }
+      }
+    },
+    "scale": {
+      "type": "object", "additionalProperties": false,
+      "required": ["min", "max", "surge", "admittedPods", "cpuTarget", "pdbMin"],
+      "properties": {
+        "min": { "$ref": "#/definitions/positive" }, "max": { "$ref": "#/definitions/positive" },
+        "surge": { "$ref": "#/definitions/positive" }, "admittedPods": { "$ref": "#/definitions/positive" },
+        "cpuTarget": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "pdbMin": { "$ref": "#/definitions/positive" }
+      }
+    },
+    "web": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "artifact", "uid", "gid", "writable", "port", "resources", "scale", "lifecycle", "secretKeys", "database"],
+      "properties": {
+        "kind": { "const": "deployment" }, "artifact": { "const": "web" }, "uid": { "const": 1001 }, "gid": { "const": 1001 },
+        "writable": { "const": { "tmp": "/tmp", "next-cache": "/app/apps/web/.next/cache" } }, "port": { "const": 3000 },
+        "resources": { "$ref": "#/definitions/resources" }, "scale": { "$ref": "#/definitions/scale" },
+        "lifecycle": {
+          "type": "object", "additionalProperties": false, "required": ["live", "ready", "graceSeconds"],
+          "properties": { "live": { "const": "/healthz" }, "ready": { "const": "/readyz" }, "graceSeconds": { "$ref": "#/definitions/positive" } }
+        },
+        "secretKeys": { "const": { "WORKOS_API_KEY": "workos-api-key", "WORKOS_CLIENT_ID": "workos-client-id", "WORKOS_COOKIE_PASSWORD": "workos-cookie-password", "WORKOS_ISSUER": "workos-issuer" } },
+        "database": { "const": { "kind": "none" } }
+      }
+    },
+    "api": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "artifact", "uid", "gid", "writable", "port", "resources", "scale", "lifecycle", "secretKeys", "database"],
+      "properties": {
+        "kind": { "const": "deployment" }, "artifact": { "const": "api" }, "uid": { "const": 65532 }, "gid": { "const": 65532 },
+        "writable": { "const": {} }, "port": { "const": 8080 },
+        "resources": { "$ref": "#/definitions/resources" }, "scale": { "$ref": "#/definitions/scale" },
+        "lifecycle": {
+          "type": "object", "additionalProperties": false, "required": ["live", "ready", "graceSeconds", "drainSeconds"],
+          "properties": {
+            "live": { "const": "/healthz" }, "ready": { "const": "/readyz" },
+            "graceSeconds": { "$ref": "#/definitions/positive" }, "drainSeconds": { "$ref": "#/definitions/positive" }
+          }
+        },
+        "secretKeys": { "const": {
+          "TACIT_DATABASE_URL": "database-url", "TACIT_REALTIME_LISTEN_DATABASE_URL": "listen-database-url",
+          "TACIT_REALTIME_CURSOR_KEY": "realtime-cursor-key", "TACIT_IDENTITY_NAMESPACE": "identity-namespace",
+          "TACIT_WORKOS_CLIENT_ID": "workos-client-id", "TACIT_WORKOS_ISSUER": "workos-issuer",
+          "TACIT_WORKOS_JWKS_URL": "workos-jwks-url", "TACIT_WORKOS_WEBHOOK_SECRET": "workos-webhook-secret"
+        } },
+        "database": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "poolPerPod", "directPerPod"],
+          "properties": {
+            "kind": { "const": "transaction-and-direct-listen" },
+            "poolPerPod": { "type": "integer", "minimum": 1, "maximum": 4 }, "directPerPod": { "const": 1 }
+          }
+        }
+      }
+    },
+    "migration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "artifact", "uid", "gid", "writable", "resources", "admittedPods", "lifecycle", "secretKeys", "database"],
+      "properties": {
+        "kind": { "const": "job" }, "artifact": { "const": "db" }, "uid": { "const": 65532 }, "gid": { "const": 65532 },
+        "writable": { "const": {} }, "resources": { "$ref": "#/definitions/resources" }, "admittedPods": { "const": 1 },
+        "lifecycle": {
+          "type": "object", "additionalProperties": false, "required": ["graceSeconds", "deadlineSeconds", "ttlSeconds"],
+          "properties": {
+            "graceSeconds": { "$ref": "#/definitions/positive" }, "deadlineSeconds": { "$ref": "#/definitions/positive" }, "ttlSeconds": { "$ref": "#/definitions/positive" }
+          }
+        },
+        "secretKeys": { "const": { "TACIT_DATABASE_DIRECT_URL": "migration-database-url" } },
+        "database": { "const": { "kind": "direct-ddl", "directPerPod": 1 } }
+      }
+    }
+  }
+}

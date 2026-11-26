@@ -1,0 +1,66 @@
+{{- if eq .Values.phase "foundation" }}
+{{- $catalog := .Files.Get "files/platform.v1.json" | fromJson }}
+{{- $environment := .Values.environment }}
+{{- range $role, $workload := $catalog.workloads }}
+{{- if ne $workload.kind "contract" }}
+{{- $ns := include "tacit.namespace" (dict "environment" $environment "role" $role) }}
+{{- $labels := include "tacit.labels" $role | fromJson }}
+{{- $metadata := include "tacit.metadata" (dict "name" $role "namespace" $ns "role" $role) | fromJson }}
+{{- $pods := $workload.admittedPods }}
+{{- if eq $workload.kind "deployment" }}{{- $pods = $workload.scale.admittedPods }}{{- end }}
+{{- $resources := $workload.resources }}
+{{- $quota := dict "pods" (toString $pods)
+    "requests.cpu" (printf "%dm" (mul $pods $resources.requestCPU))
+    "requests.memory" (printf "%dMi" (mul $pods $resources.requestMemory))
+    "limits.cpu" (printf "%dm" (mul $pods $resources.limitCPU))
+    "limits.memory" (printf "%dMi" (mul $pods $resources.limitMemory))
+    "requests.ephemeral-storage" (printf "%dMi" (mul $pods $resources.scratch))
+    "limits.ephemeral-storage" (printf "%dMi" (mul $pods $resources.scratch)) }}
+{{- $nsLabels := merge (dict "pod-security.kubernetes.io/enforce" "restricted" "pod-security.kubernetes.io/enforce-version" $catalog.security.podSecurityVersion "tacit.dev/environment" $environment) $labels }}
+---
+{{ dict "apiVersion" "v1" "kind" "Namespace" "metadata" (dict "name" $ns "labels" $nsLabels "annotations" (dict "helm.sh/resource-policy" "keep")) | toJson }}
+---
+{{ dict "apiVersion" "v1" "kind" "ServiceAccount" "metadata" $metadata "automountServiceAccountToken" false | toJson }}
+---
+{{ dict "apiVersion" "v1" "kind" "ResourceQuota" "metadata" $metadata "spec" (dict "hard" $quota) | toJson }}
+---
+{{ include "tacit.policy" (dict "name" "default-deny" "namespace" $ns "role" $role "spec" (dict "podSelector" (dict) "policyTypes" (list "Ingress" "Egress"))) }}
+{{- if has $role $catalog.network.edges.ingress }}
+{{- $policy := dict "from" (list (include "tacit.peer" $catalog.network.ingressPeer | fromJson)) "ports" (list (dict "protocol" "TCP" "port" $workload.port)) }}
+---
+{{ include "tacit.policy" (dict "name" "from-ingress" "namespace" $ns "role" $role "spec" (dict "podSelector" (dict "matchLabels" $labels) "policyTypes" (list "Ingress") "ingress" (list $policy))) }}
+{{- end }}
+{{- if has $role $catalog.network.edges.dns }}
+{{- $policy := dict "to" (list (include "tacit.peer" $catalog.network.dnsPeer | fromJson)) "ports" (list (dict "protocol" "UDP" "port" 53) (dict "protocol" "TCP" "port" 53)) }}
+---
+{{ include "tacit.policy" (dict "name" "to-dns" "namespace" $ns "role" $role "spec" (dict "podSelector" (dict "matchLabels" $labels) "policyTypes" (list "Egress") "egress" (list $policy))) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $edge := $catalog.network.edges.internal }}
+{{- $fromNS := include "tacit.namespace" (dict "environment" $environment "role" $edge.from) }}
+{{- $toNS := include "tacit.namespace" (dict "environment" $environment "role" $edge.to) }}
+{{- $fromLabels := include "tacit.labels" $edge.from | fromJson }}
+{{- $toLabels := include "tacit.labels" $edge.to | fromJson }}
+{{- $ports := list (dict "protocol" "TCP" "port" (index $catalog.workloads $edge.to).port) }}
+{{- $egress := dict "to" (list (include "tacit.peer" (dict "namespace" $toNS "labels" $toLabels) | fromJson)) "ports" $ports }}
+{{- $ingress := dict "from" (list (include "tacit.peer" (dict "namespace" $fromNS "labels" $fromLabels) | fromJson)) "ports" $ports }}
+---
+{{ include "tacit.policy" (dict "name" (printf "to-%s" $edge.to) "namespace" $fromNS "role" $edge.from "spec"
+    (dict "podSelector" (dict "matchLabels" $fromLabels) "policyTypes" (list "Egress") "egress" (list $egress))) }}
+---
+{{ include "tacit.policy" (dict "name" (printf "from-%s" $edge.from) "namespace" $toNS "role" $edge.to "spec"
+    (dict "podSelector" (dict "matchLabels" $toLabels) "policyTypes" (list "Ingress") "ingress" (list $ingress))) }}
+{{- end }}
+{{- range $name, $edge := $catalog.network.edges.external }}
+{{- $ns := include "tacit.namespace" (dict "environment" $environment "role" $edge.from) }}
+{{- $peers := list }}
+{{- range $cidr := index $.Values.egress $name }}
+{{- $peers = append $peers (dict "ipBlock" (dict "cidr" $cidr)) }}
+{{- end }}
+{{- $rule := dict "to" $peers "ports" (list (dict "protocol" "TCP" "port" $edge.port)) }}
+---
+{{ include "tacit.policy" (dict "name" $name "namespace" $ns "role" $edge.from "spec"
+    (dict "podSelector" (dict "matchLabels" (include "tacit.labels" $edge.from | fromJson)) "policyTypes" (list "Egress") "egress" (list $rule))) }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,15 @@
+{{- if or (eq .Values.phase "migration") (eq .Values.phase "schema-check") }}
+{{- $catalog := .Files.Get "files/platform.v1.json" | fromJson }}
+{{- $workload := $catalog.workloads.migration }}
+{{- $ns := include "tacit.namespace" (dict "environment" .Values.environment "role" "migration") }}
+{{- $action := ternary "migrate" "verify-schema" (eq .Values.phase "migration") }}
+{{- $name := printf "tacit-%s-%s" $action .Values.revision }}
+{{- $metadata := include "tacit.metadata" (dict "name" $name "namespace" $ns "role" "migration") | fromJson }}
+{{- $template := include "tacit.pod" (dict "role" "migration" "workload" $workload "security" $catalog.security
+    "schemaVersion" $catalog.schemaVersion "revision" .Values.revision "image" (index .Values.images $workload.artifact)
+    "secret" .Values.secrets.migration "env" (dict) "args" (list $action)) | fromJson }}
+{{- $job := dict "activeDeadlineSeconds" $workload.lifecycle.deadlineSeconds "ttlSecondsAfterFinished" $workload.lifecycle.ttlSeconds
+    "backoffLimit" 0 "parallelism" 1 "completions" 1 "template" $template }}
+---
+{{ dict "apiVersion" "batch/v1" "kind" "Job" "metadata" $metadata "spec" $job | toJson }}
+{{- end }}

@@ -1,0 +1,60 @@
+{{- if eq .Values.phase "application" }}
+{{- $catalog := .Files.Get "files/platform.v1.json" | fromJson }}
+{{- range $role, $workload := $catalog.workloads }}
+{{- if eq $workload.kind "deployment" }}
+{{- $ns := include "tacit.namespace" (dict "environment" $.Values.environment "role" $role) }}
+{{- $metadata := include "tacit.metadata" (dict "name" $role "namespace" $ns "role" $role) | fromJson }}
+{{- $selector := dict "matchLabels" (include "tacit.labels" $role | fromJson) }}
+{{- $scale := $workload.scale }}
+{{- $host := $.Values.ingress.webhookHost }}
+{{- $tls := $.Values.ingress.webhookTLSSecret }}
+{{- $exact := list $catalog.network.webhookPath }}
+{{- $prefixes := list }}
+{{- $env := dict "TACIT_ENV" "production" }}
+{{- $args := list }}
+{{- if eq $role "api" }}
+  {{- $_ := set $env "TACIT_DATABASE_MAX_CONNECTIONS" (toString $workload.database.poolPerPod) }}
+  {{- $args = list (printf "--listen=0.0.0.0:%d" (int $workload.port)) (printf "--drain-timeout=%ds" (int $workload.lifecycle.drainSeconds)) }}
+{{- else }}
+  {{- $host = $.Values.ingress.webHost }}
+  {{- $tls = $.Values.ingress.webTLSSecret }}
+  {{- $exact = $catalog.network.webExactPaths }}
+  {{- $prefixes = $catalog.network.webPrefixPaths }}
+  {{- $apiNS := include "tacit.namespace" (dict "environment" $.Values.environment "role" "api") }}
+  {{- $_ := set $env "TACIT_API_ORIGIN" (printf "http://api.%s.svc.cluster.local:%d" $apiNS (int $catalog.workloads.api.port)) }}
+  {{- $_ := set $env "TACIT_WEB_ORIGIN" (printf "https://%s" $host) }}
+  {{- $_ := set $env "NEXT_PUBLIC_WORKOS_REDIRECT_URI" (printf "https://%s/auth/callback" $host) }}
+  {{- $_ := set $env "PORT" (toString $workload.port) }}
+{{- end }}
+{{- $template := include "tacit.pod" (dict "role" $role "workload" $workload "security" $catalog.security
+    "schemaVersion" $catalog.schemaVersion "revision" $.Values.revision "image" (index $.Values.images $workload.artifact)
+    "secret" (index $.Values.secrets $role) "env" $env "args" $args) | fromJson }}
+{{- $strategy := dict "type" "RollingUpdate" "rollingUpdate" (dict "maxUnavailable" 0 "maxSurge" $scale.surge) }}
+{{- $deployment := dict "selector" $selector "template" $template "strategy" $strategy "minReadySeconds" 5 "progressDeadlineSeconds" 240 }}
+---
+{{ dict "apiVersion" "apps/v1" "kind" "Deployment" "metadata" $metadata "spec" $deployment | toJson }}
+---
+{{ dict "apiVersion" "v1" "kind" "Service" "metadata" $metadata "spec" (dict "type" "ClusterIP" "selector" $selector.matchLabels
+    "ports" (list (dict "name" "http" "port" $workload.port "targetPort" "http")) "sessionAffinity" "None") | toJson }}
+---
+{{ dict "apiVersion" "policy/v1" "kind" "PodDisruptionBudget" "metadata" $metadata "spec" (dict "minAvailable" $scale.pdbMin "selector" $selector) | toJson }}
+{{- $metric := dict "type" "Resource" "resource" (dict "name" "cpu" "target" (dict "type" "Utilization" "averageUtilization" $scale.cpuTarget)) }}
+---
+{{ dict "apiVersion" "autoscaling/v2" "kind" "HorizontalPodAutoscaler" "metadata" $metadata "spec" (dict "scaleTargetRef"
+    (dict "apiVersion" "apps/v1" "kind" "Deployment" "name" $role) "minReplicas" $scale.min "maxReplicas" $scale.max "metrics" (list $metric)) | toJson }}
+{{- $paths := list }}
+{{- $backend := dict "service" (dict "name" $role "port" (dict "name" "http")) }}
+{{- range $path := $exact }}
+  {{- $paths = append $paths (dict "path" $path "pathType" "Exact" "backend" $backend) }}
+{{- end }}
+{{- range $path := $prefixes }}
+  {{- $paths = append $paths (dict "path" $path "pathType" "Prefix" "backend" $backend) }}
+{{- end }}
+{{- $rules := list (dict "host" $host "http" (dict "paths" $paths)) }}
+{{- $ingress := dict "ingressClassName" $catalog.network.ingressClass "rules" $rules "tls" (list (dict "hosts" (list $host) "secretName" $tls)) }}
+{{- $ingressMetadata := merge (dict "annotations" (dict "traefik.ingress.kubernetes.io/router.entrypoints" "websecure" "traefik.ingress.kubernetes.io/router.tls" "true")) $metadata }}
+---
+{{ dict "apiVersion" "networking.k8s.io/v1" "kind" "Ingress" "metadata" $ingressMetadata "spec" $ingress | toJson }}
+{{- end }}
+{{- end }}
+{{- end }}
